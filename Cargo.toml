@@ -1,0 +1,24 @@
+[package]
+name = "corvin-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "AGPL-3.0-or-later"
+description = "Corvin real-time game server: lobby, rated play, tournaments, and HTTP API"
+repository = "https://github.com/corvin-chess/server"
+readme = "README.md"
+keywords = ["chess", "server", "axum"]
+categories = ["games"]
+publish = false
+
+[[bin]]
+name = "corvin-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
