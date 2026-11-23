@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * CV-012: assert server README matches README_STYLE repository template rules.
+ * Assert server README matches README_STYLE repository template rules (CV-012/CV-130).
  */
 import { readFileSync, existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
@@ -21,7 +21,8 @@ const CLOSING =
   "A move is real only when the server has written it down."
 
 const PLANNED_AREAS =
-  /^(Axum scaffold|Play protocol \/ WS|Auth|Matchmaking|Implementation)$/i
+  /^(Play protocol \/ WS|Auth|Matchmaking|Implementation)$/i
+const BUILT_AREAS = /^(README|Axum scaffold)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -151,6 +152,7 @@ if (!statusTableMatch) {
   const table = statusTableMatch[0]
   const stateCells = [...table.matchAll(/\|\s*([^|\n]+)\s*\|\s*([^|\n]+)\s*\|/g)]
   let sawReadmeBuilt = false
+  let sawAxumBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -161,8 +163,14 @@ if (!statusTableMatch) {
       fail(`STATUS row "${area}" must be Planned or Built; got "${state}"`)
       continue
     }
+    if (BUILT_AREAS.test(area) && !/^Built$/i.test(state)) {
+      fail(`STATUS row "${area}" must be Built; got "${state}"`)
+    }
     if (/^README$/i.test(area) && /^Built$/i.test(state)) {
       sawReadmeBuilt = true
+    }
+    if (/^Axum scaffold$/i.test(area) && /^Built$/i.test(state)) {
+      sawAxumBuilt = true
     }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
@@ -172,6 +180,7 @@ if (!statusTableMatch) {
     }
   }
   if (!sawReadmeBuilt) fail('STATUS must include "| README | Built |"')
+  if (!sawAxumBuilt) fail('STATUS must include "| Axum scaffold | Built |"')
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
 }
@@ -183,17 +192,42 @@ if (claimedBuilt.test(readme)) {
   ok("no unverified strength/production claims")
 }
 
-// Body must not claim implementation exists
-const forbiddenImpl = /\b(npm run|pnpm|yarn|cargo |docker compose up)\b/i
-if (forbiddenImpl.test(readme) && !/Planned/i.test(readme)) {
-  fail("run commands present without Planned framing")
+if (!readme.includes("cargo run") || !readme.includes("cargo test --locked")) {
+  fail("GETTING STARTED / TESTING must document cargo run and cargo test --locked")
+} else {
+  ok("cargo run and cargo test --locked documented")
+}
+
+if (!readme.includes("/health") || !readme.includes("HOST") || !readme.includes("PORT")) {
+  fail("README must document /health and HOST/PORT bind overrides")
+} else {
+  ok("/health and HOST/PORT documented")
+}
+
+if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
+  fail("Axum scaffold source missing (src/lib.rs, src/main.rs)")
+} else {
+  ok("Axum scaffold source present")
+}
+
+if (!existsSync(join(repoRoot, "Cargo.toml"))) {
+  fail("missing Cargo.toml")
+} else {
+  const cargo = readFileSync(join(repoRoot, "Cargo.toml"), "utf8")
+  if (!cargo.includes('name = "corvin-server"')) {
+    fail('Cargo.toml must name package corvin-server')
+  } else if (!cargo.includes("axum")) {
+    fail("Cargo.toml must depend on axum")
+  } else {
+    ok("Cargo.toml names corvin-server with axum")
+  }
 }
 
 const linkRe = /https:\/\/github\.com\/corvin-chess\/([A-Za-z0-9._-]+)/g
 const linked = new Set()
 let m
 while ((m = linkRe.exec(readme)) !== null) {
-  linked.add(m[1])
+  linked.add(m[1].replace(/\.git$/i, ""))
 }
 
 const knownRepos = new Set([
@@ -283,5 +317,5 @@ for (const bit of requiredHeaderBits) {
 if (!process.exitCode) ok("header, footer, license heading present")
 
 if (!process.exitCode) {
-  console.log("All CV-012 server README checks passed.")
+  console.log("All server README checks passed.")
 }
