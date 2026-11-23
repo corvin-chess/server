@@ -22,7 +22,7 @@ const CLOSING =
 
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Auth|Matchmaking|Implementation)$/i
-const BUILT_AREAS = /^(README|Axum scaffold)$/i
+const BUILT_AREAS = /^(README|Axum scaffold|Postgres migrations)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -153,6 +153,7 @@ if (!statusTableMatch) {
   const stateCells = [...table.matchAll(/\|\s*([^|\n]+)\s*\|\s*([^|\n]+)\s*\|/g)]
   let sawReadmeBuilt = false
   let sawAxumBuilt = false
+  let sawMigrationsBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -172,6 +173,9 @@ if (!statusTableMatch) {
     if (/^Axum scaffold$/i.test(area) && /^Built$/i.test(state)) {
       sawAxumBuilt = true
     }
+    if (/^Postgres migrations$/i.test(area) && /^Built$/i.test(state)) {
+      sawMigrationsBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -181,6 +185,7 @@ if (!statusTableMatch) {
   }
   if (!sawReadmeBuilt) fail('STATUS must include "| README | Built |"')
   if (!sawAxumBuilt) fail('STATUS must include "| Axum scaffold | Built |"')
+  if (!sawMigrationsBuilt) fail('STATUS must include "| Postgres migrations | Built |"')
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
 }
@@ -204,10 +209,30 @@ if (!readme.includes("/health") || !readme.includes("HOST") || !readme.includes(
   ok("/health and HOST/PORT documented")
 }
 
+if (
+  !readme.includes("DATABASE_URL") ||
+  !readme.includes("migrate up") ||
+  !readme.includes("migrate down")
+) {
+  fail("README must document DATABASE_URL and migrate up/down")
+} else {
+  ok("DATABASE_URL and migrate up/down documented")
+}
+
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
   fail("Axum scaffold source missing (src/lib.rs, src/main.rs)")
 } else {
   ok("Axum scaffold source present")
+}
+
+const migrationsDir = join(repoRoot, "migrations")
+const upSql = join(migrationsDir, "20261123120000_users_sessions.up.sql")
+const downSql = join(migrationsDir, "20261123120000_users_sessions.down.sql")
+const dbRs = join(repoRoot, "src", "db.rs")
+if (!existsSync(upSql) || !existsSync(downSql) || !existsSync(dbRs)) {
+  fail("Postgres migrations missing (migrations/*.up.sql, *.down.sql, src/db.rs)")
+} else {
+  ok("Postgres migration sources present")
 }
 
 if (!existsSync(join(repoRoot, "Cargo.toml"))) {
@@ -218,8 +243,10 @@ if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     fail('Cargo.toml must name package corvin-server')
   } else if (!cargo.includes("axum")) {
     fail("Cargo.toml must depend on axum")
+  } else if (!cargo.includes("sqlx")) {
+    fail("Cargo.toml must depend on sqlx for migrations")
   } else {
-    ok("Cargo.toml names corvin-server with axum")
+    ok("Cargo.toml names corvin-server with axum and sqlx")
   }
 }
 
