@@ -11,6 +11,22 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: corvin
+          POSTGRES_PASSWORD: corvin_dev_only_change_me
+          POSTGRES_DB: corvin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U corvin -d corvin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://corvin:corvin_dev_only_change_me@localhost:5432/corvin
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
