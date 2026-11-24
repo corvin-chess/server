@@ -135,6 +135,7 @@ pub async fn create_matched_game(
         clock_w_ms: config.initial_ms,
         clock_b_ms: config.initial_ms,
         increment_ms: config.increment_ms,
+        initial_ms: config.initial_ms,
         active: "w".to_owned(),
         // Clocks start at GameStart so flag claims have a baseline (CV-163).
         active_started_ms: now_ms,

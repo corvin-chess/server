@@ -59,6 +59,9 @@ pub struct GameMeta {
     /// When true, a terminal finish updates Glicko-2 once (CV-168). Abort never rates.
     #[serde(default)]
     pub rated: bool,
+    /// Starting clock for each seat (ms). Used for PGN TimeControl after finish (CV-169).
+    #[serde(default)]
+    pub initial_ms: u64,
     /// Open draw/takeback offer, if any (CV-165).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_offer: Option<PendingOffer>,
@@ -106,6 +109,7 @@ impl Default for GameMeta {
             lag_one_way_b_ms: 0,
             time_class: default_time_class(),
             rated: false,
+            initial_ms: 0,
             pending_offer: None,
             prev_clock_w_ms: 0,
             prev_clock_b_ms: 0,
