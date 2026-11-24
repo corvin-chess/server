@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -162,6 +162,7 @@ if (!statusTableMatch) {
   let sawWsHelloBuilt = false
   let sawGameEventLogBuilt = false
   let sawMoveApplyBuilt = false
+  let sawClocksBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -205,6 +206,9 @@ if (!statusTableMatch) {
     if (/^Move apply$/i.test(area) && /^Built$/i.test(state)) {
       sawMoveApplyBuilt = true
     }
+    if (/^Clocks$/i.test(area) && /^Built$/i.test(state)) {
+      sawClocksBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -231,6 +235,9 @@ if (!statusTableMatch) {
   }
   if (!sawMoveApplyBuilt) {
     fail('STATUS must include "| Move apply | Built |"')
+  }
+  if (!sawClocksBuilt) {
+    fail('STATUS must include "| Clocks | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -428,6 +435,28 @@ if (
   )
 } else {
   ok("Move apply surface documented")
+}
+
+const clockRs = join(repoRoot, "src", "game", "clock.rs")
+const clocksTest = join(repoRoot, "tests", "clocks.rs")
+if (!existsSync(clockRs) || !existsSync(clocksTest)) {
+  fail("Clocks sources missing (src/game/clock.rs, tests/clocks.rs)")
+} else {
+  ok("Clocks sources present")
+}
+
+if (
+  !readme.includes("claim_flag") ||
+  !readme.includes("ClockSync") ||
+  !readme.includes("increment") ||
+  !readme.includes("clocks") ||
+  !readme.includes("Fischer")
+) {
+  fail(
+    "README must document claim_flag, ClockSync, Fischer increment, and clocks tests"
+  )
+} else {
+  ok("Clocks surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {

@@ -1,4 +1,5 @@
 //! Legal move apply with PROTOCOL MoveApplied / MoveRejected mapping (CV-162).
+//! Clocks tick + Fischer increment + flag-before-increment (CV-163 / ADR-005).
 
 use std::fmt;
 
@@ -6,9 +7,14 @@ use corvin_chess_core::{Color, Move, Position, UciError};
 use redis::aio::ConnectionManager;
 use serde_json::{json, Value};
 
+use super::clock::{
+    flag_outcome_for_position, is_flagged_at, tick_meta_on_move, write_flag_to_meta,
+    write_tick_to_meta, ClockPair, ClockTick, FlagOutcome,
+};
 use super::replay::replay_fen;
 use super::store::{
-    append_move_event, load_events, load_meta, GameLogError, MAX_PLAYER_ID_LEN, MAX_UCI_LEN,
+    append_move_event, load_events, load_meta, save_meta, GameLogError, MAX_PLAYER_ID_LEN,
+    MAX_UCI_LEN,
 };
 
 const PROTOCOL_V: u32 = 1;
@@ -46,13 +52,17 @@ impl MoveRejectCode {
     }
 }
 
-/// Errors from seating / legality checks before or during apply.
+/// Errors from seating / legality / clock checks before or during apply.
 #[derive(Debug)]
 pub enum ApplyError {
     IllegalMove(String),
     NotYourTurn,
     GameGone,
     Auth,
+    /// Active side flagged at `ts` before the move could be accepted.
+    Flagged {
+        outcome: FlagOutcome,
+    },
     InvalidUci(UciError),
     Corrupt(String),
     TooManyEvents,
@@ -60,15 +70,15 @@ pub enum ApplyError {
 }
 
 impl ApplyError {
-    /// PROTOCOL `MoveRejected.code` when this error is a client reject; `None` → `Error` `INTERNAL`.
+    /// PROTOCOL `MoveRejected.code` when this error is a client reject; `None` → `Error`/`GameEnd`.
     pub fn reject_code(&self) -> Option<MoveRejectCode> {
         match self {
             Self::IllegalMove(_) | Self::InvalidUci(_) => Some(MoveRejectCode::IllegalMove),
             Self::NotYourTurn => Some(MoveRejectCode::NotYourTurn),
             Self::GameGone => Some(MoveRejectCode::GameGone),
             Self::Auth => Some(MoveRejectCode::Auth),
-            // Storage faults are not MoveRejected; WS callers must send Error INTERNAL.
-            Self::Corrupt(_) | Self::TooManyEvents | Self::Redis(_) => None,
+            // Flag mid-apply is GameEnd, not MoveRejected. Storage faults → Error INTERNAL.
+            Self::Flagged { .. } | Self::Corrupt(_) | Self::TooManyEvents | Self::Redis(_) => None,
         }
     }
 }
@@ -80,6 +90,7 @@ impl fmt::Display for ApplyError {
             Self::NotYourTurn => write!(f, "not your turn"),
             Self::GameGone => write!(f, "game not found"),
             Self::Auth => write!(f, "not a player in this game"),
+            Self::Flagged { outcome } => write!(f, "flagged: {}", outcome.flagged),
             Self::InvalidUci(err) => write!(f, "invalid UCI: {err}"),
             Self::Corrupt(detail) => write!(f, "corrupt game state: {detail}"),
             Self::TooManyEvents => write!(f, "game event log exceeds max length"),
@@ -165,8 +176,9 @@ pub fn move_rejected_json(id: &str, code: MoveRejectCode, message: &str) -> Valu
 
 /// Apply a legal UCI move for `player_id` and append it to the Redis event log.
 ///
-/// Clocks are echoed from meta unchanged (CV-163 owns tick/increment/flag).
-/// Single-writer per game is assumed; concurrent apply needs Lua/CAS before WS (CV-171).
+/// Deducts elapsed think time from the mover, adds Fischer `increment_ms`, then
+/// starts the opponent clock at `ts`. Flags before increment (ADR-005).
+/// Single-writer per game is assumed; concurrent apply needs Lua/CAS (CV-171).
 pub async fn apply_move(
     conn: &mut ConnectionManager,
     game_id: &str,
@@ -181,7 +193,10 @@ pub async fn apply_move(
         return Err(ApplyError::InvalidUci(UciError::Invalid));
     }
 
-    let meta = load_meta(conn, game_id).await?;
+    let mut meta = load_meta(conn, game_id).await?;
+    if meta.ended {
+        return Err(ApplyError::GameGone);
+    }
     if meta.white_id.is_empty() || meta.black_id.is_empty() {
         return Err(ApplyError::Auth);
     }
@@ -202,6 +217,34 @@ pub async fn apply_move(
         return Err(ApplyError::NotYourTurn);
     }
 
+    let board_active = color_active(seat);
+    let peek = ClockPair {
+        w_ms: meta.clock_w_ms,
+        b_ms: meta.clock_b_ms,
+        increment_ms: meta.increment_ms,
+        active: if meta.active.is_empty() {
+            board_active.to_owned()
+        } else {
+            meta.active.clone()
+        },
+        active_started_ms: meta.active_started_ms,
+    };
+    // Flag before legality: out-of-time ends the game even on an illegal UCI.
+    if let Some(color) = is_flagged_at(&peek, ts) {
+        let outcome = flag_outcome_for_position(&fen, color).map_err(ApplyError::Corrupt)?;
+        let mut zeroed = peek;
+        if color == "w" {
+            zeroed.w_ms = 0;
+        } else {
+            zeroed.b_ms = 0;
+        }
+        write_flag_to_meta(&mut meta, color, &zeroed);
+        meta.ended_reason = Some(format!("flag:{}", outcome.result));
+        save_meta(conn, game_id, &meta).await?;
+        return Err(ApplyError::Flagged { outcome });
+    }
+
+    // Legality before clock commit so illegal attempts do not mutate Redis clocks.
     let mv = Move::from_uci(uci).map_err(ApplyError::InvalidUci)?;
     let san = pos
         .to_san(mv)
@@ -211,6 +254,28 @@ pub async fn apply_move(
         .ok_or_else(|| ApplyError::IllegalMove(uci.to_owned()))?;
     let next_fen = next.to_fen();
 
+    // Deduct elapsed then add Fischer increment (ADR-005); must not flag here after peek.
+    match tick_meta_on_move(&meta, seat, ts) {
+        ClockTick::Flagged { color, clocks } => {
+            // Same `ts` as peek should not flag; treat as internal fault.
+            let outcome = flag_outcome_for_position(&fen, color).map_err(ApplyError::Corrupt)?;
+            write_flag_to_meta(&mut meta, color, &clocks);
+            meta.ended_reason = Some(format!("flag:{}", outcome.result));
+            save_meta(conn, game_id, &meta).await?;
+            return Err(ApplyError::Flagged { outcome });
+        }
+        ClockTick::Applied(pair) => {
+            write_tick_to_meta(&mut meta, &pair);
+        }
+    }
+
+    // Align meta.active with post-move side to move (tick already switched).
+    meta.active = color_active(next.side_to_move()).to_owned();
+
+    // Persist clocks before the ply so a failed RPUSH does not leave an orphan move
+    // with stale clocks; a failed append after save leaves clocks ahead of the board
+    // (recoverable by CV-171 atomic apply). Prefer that over move-without-clocks.
+    save_meta(conn, game_id, &meta).await?;
     let seq = append_move_event(conn, game_id, uci, ts).await?;
 
     Ok(AppliedMove {
