@@ -2,7 +2,7 @@
 
 <a href="https://github.com/corvin-chess"><img src="https://capsule-render.vercel.app/api?type=waving&height=200&color=0:0b0d12,55:161b2b,100:2f3d63&text=Corvin&fontColor=e6e9f2&fontSize=64&fontAlignY=45&animation=twinkling" alt="Corvin" width="100%" /></a>
 
-<img src="https://readme-typing-svg.demolab.com?font=IBM+Plex+Mono&weight=500&size=16&color=8FA3D9&center=true&vCenter=true&width=560&height=34&duration=2800&pause=1200&lines=server;Axum+/health,+Postgres,+Redis+presence,+passkey+and+email+OTP+auth.+Lobby+Planned." alt="server" />
+<img src="https://readme-typing-svg.demolab.com?font=IBM+Plex+Mono&weight=500&size=16&color=8FA3D9&center=true&vCenter=true&width=560&height=34&duration=2800&pause=1200&lines=server;Axum+/health,+Postgres,+Redis,+auth+session+cookies+and+CSRF.+Lobby+Planned." alt="server" />
 
 <p>
   <a href="https://github.com/corvin-chess/server"><img src="https://skillicons.dev/icons?i=rust&theme=dark" width="44" height="44" alt="server" /></a>&nbsp;
@@ -13,7 +13,7 @@
 
 <br/>
 
-Rust Axum game server for Corvin. Ships a bindable binary with `GET /health`, reversible Postgres migrations for `users`, `sessions`, `passkeys`, and `email_otps`, Redis presence keys, and HTTP auth under `/api/v1/auth` (WebAuthn passkeys plus email OTP). Lobby, rated play, tournaments, WebSocket protocol, and the wider HTTP API remain Planned.
+Rust Axum game server for Corvin. Ships a bindable binary with `GET /health`, reversible Postgres migrations for `users`, `sessions`, `passkeys`, and `email_otps`, Redis presence keys, HTTP auth under `/api/v1/auth` (WebAuthn passkeys plus email OTP), HttpOnly session cookies, and CSRF-bound logout. Lobby, rated play, tournaments, WebSocket protocol, and the wider HTTP API remain Planned.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&height=3&color=0:0b0d12,35:8fa3d9,70:c9a227,100:0b0d12" width="100%" alt="" />
 
@@ -21,7 +21,7 @@ Rust Axum game server for Corvin. Ships a bindable binary with `GET /health`, re
 
 <p align="center"><img src="https://readme-typing-svg.demolab.com?font=IBM+Plex+Mono&weight=700&size=18&color=8FA3D9&center=true&vCenter=true&width=420&height=40&duration=1&pause=1000000&letterSpacing=6px&lines=OVERVIEW" alt="Overview" /></p>
 
-Rust Axum server for Corvin. Current surface: `GET /health` returns HTTP 200 with plain body `ok` plus a trailing newline for Compose probes; reversible SQL migrations under `migrations/` create `users`, `sessions`, `passkeys`, and `email_otps` (ULID account ids, opaque sessions with CSRF secret material, WebAuthn credential JSON, hashed email OTP challenges); Redis helpers under `src/redis_store.rs` connect via `REDIS_URL` and maintain short-TTL presence keys `corvin:presence:{user_id}`; auth routes under `/api/v1/auth/email/otp/*` and `/api/v1/auth/passkey/*` mint HttpOnly session cookies on successful register/login. Planned surfaces: WebSocket play protocol, lobby and matchmaking, clocks, ratings, tournaments, CSRF binding for cookie mutations, and the wider HTTP API. Intended dependencies: PostgreSQL for durable data, Redis for live games and presence, [chess-core](https://github.com/corvin-chess/chess-core) for legality, and optional analysis via [engine](https://github.com/corvin-chess/engine). Fair-play review hooks are planned to consume the public [fairplay](https://github.com/corvin-chess/fairplay) library; private thresholds stay out of this repository. Outbound SMTP is not wired yet; OTP delivery uses a log sink unless tests inject a capture mailer.
+Rust Axum server for Corvin. Current surface: `GET /health` returns HTTP 200 with plain body `ok` plus a trailing newline for Compose probes; reversible SQL migrations under `migrations/` create `users`, `sessions`, `passkeys`, and `email_otps` (ULID account ids, opaque sessions with CSRF secret material, WebAuthn credential JSON, hashed email OTP challenges); Redis helpers under `src/redis_store.rs` connect via `REDIS_URL` and maintain short-TTL presence keys `corvin:presence:{user_id}`; auth routes under `/api/v1/auth/email/otp/*` and `/api/v1/auth/passkey/*` mint HttpOnly `corvin_session` cookies (`SameSite=Lax`, `Secure` on https) and return a synchronizer `csrf_token` (prior sessions for that user are revoked); `GET /api/v1/auth/session` resolves the cookie to `{user_id,username,csrf_token}`; `POST /api/v1/auth/logout` requires matching `X-CSRF-Token` and clears the cookie. Planned surfaces: WebSocket play protocol, lobby and matchmaking, clocks, ratings, tournaments, and the wider HTTP API (further cookie-authenticated mutations reuse the same CSRF header). Intended dependencies: PostgreSQL for durable data, Redis for live games and presence, [chess-core](https://github.com/corvin-chess/chess-core) for legality, and optional analysis via [engine](https://github.com/corvin-chess/engine). Fair-play review hooks are planned to consume the public [fairplay](https://github.com/corvin-chess/fairplay) library; private thresholds stay out of this repository. Outbound SMTP is not wired yet; OTP delivery uses a log sink unless tests inject a capture mailer.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&height=3&color=0:0b0d12,35:8fa3d9,70:c9a227,100:0b0d12" width="100%" alt="" />
 
@@ -84,7 +84,7 @@ cargo test --locked
 node scripts/verify-readme.mjs
 ```
 
-`tests/health.rs` asserts `/health` returns 200 with body `ok\n` and unknown paths return 404. `tests/migrations.rs` asserts paired up/down SQL and, when `DATABASE_URL` is set, applies migrate up/down against Postgres including `passkeys` / `email_otps` (CI runs Postgres 16). `tests/presence.rs` asserts presence key shape and, when `REDIS_URL` is set, PING plus touch/clear/TTL expiry against Redis (CI runs Redis 7). `tests/auth_email_otp.rs` and `tests/auth_passkey.rs` exercise register/login e2e when `DATABASE_URL` is set (capture mailer; SoftPasskey). Planned protocol contract and Compose integration checks land with later tasks.
+`tests/health.rs` asserts `/health` returns 200 with body `ok\n` and unknown paths return 404. `tests/migrations.rs` asserts paired up/down SQL and, when `DATABASE_URL` is set, applies migrate up/down against Postgres including `passkeys` / `email_otps` (CI runs Postgres 16). `tests/presence.rs` asserts presence key shape and, when `REDIS_URL` is set, PING plus touch/clear/TTL expiry against Redis (CI runs Redis 7). `tests/auth_email_otp.rs` and `tests/auth_passkey.rs` exercise register/login e2e when `DATABASE_URL` is set (capture mailer; SoftPasskey). `tests/session_csrf.rs` asserts cookie attribute matrix always-on and, when `DATABASE_URL` is set, CSRF-bound logout plus session probe security tests. Planned protocol contract and Compose integration checks land with later tasks.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&height=3&color=0:0b0d12,35:8fa3d9,70:c9a227,100:0b0d12" width="100%" alt="" />
 
@@ -107,6 +107,7 @@ Binary crate `corvin-server`: `src/lib.rs` owns the Axum router and `AppState`; 
 | Postgres migrations | Built |
 | Redis presence | Built |
 | Auth | Built |
+| Session cookies / CSRF | Built |
 | Play protocol / WS | Planned |
 | Matchmaking | Planned |
 | Implementation | Planned |
