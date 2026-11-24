@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -167,6 +167,7 @@ if (!statusTableMatch) {
   let sawOffersBuilt = false
   let sawDrawClaimsBuilt = false
   let sawMatchmakingBuilt = false
+  let sawRatingsBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -225,6 +226,9 @@ if (!statusTableMatch) {
     if (/^Matchmaking$/i.test(area) && /^Built$/i.test(state)) {
       sawMatchmakingBuilt = true
     }
+    if (/^Ratings$/i.test(area) && /^Built$/i.test(state)) {
+      sawRatingsBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -266,6 +270,9 @@ if (!statusTableMatch) {
   }
   if (!sawMatchmakingBuilt) {
     fail('STATUS must include "| Matchmaking | Built |"')
+  }
+  if (!sawRatingsBuilt) {
+    fail('STATUS must include "| Ratings | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -578,6 +585,39 @@ if (
   )
 } else {
   ok("Matchmaking surface documented")
+}
+
+const ratingMod = join(repoRoot, "src", "rating", "mod.rs")
+const glickoRs = join(repoRoot, "src", "rating", "glicko2.rs")
+const ratingTest = join(repoRoot, "tests", "glicko2.rs")
+const ratingsTest = join(repoRoot, "tests", "ratings.rs")
+const ratingsUp = join(repoRoot, "migrations", "20261124200000_ratings.up.sql")
+if (
+  !existsSync(ratingMod) ||
+  !existsSync(glickoRs) ||
+  !existsSync(ratingTest) ||
+  !existsSync(ratingsTest) ||
+  !existsSync(ratingsUp)
+) {
+  fail(
+    "Ratings sources missing (src/rating/, tests/glicko2.rs, tests/ratings.rs, ratings migration)"
+  )
+} else {
+  ok("Ratings sources present")
+}
+
+if (
+  !readme.includes("apply_rated_finish") ||
+  !readme.includes("Glicko-2") ||
+  !readme.includes("rating_diff") ||
+  !readme.includes("rating_updates") ||
+  !(readme.includes("glicko2") && readme.includes("ratings"))
+) {
+  fail(
+    "README must document apply_rated_finish, Glicko-2, rating_diff, rating_updates, and glicko2/ratings tests"
+  )
+} else {
+  ok("Ratings surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
