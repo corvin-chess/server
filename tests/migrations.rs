@@ -115,6 +115,29 @@ async fn migrate_up_creates_users_and_sessions_then_down_removes_them() {
     assert!(table_exists(&pool, "sessions").await);
     assert!(table_exists(&pool, "passkeys").await);
     assert!(table_exists(&pool, "email_otps").await);
+    assert!(table_exists(&pool, "challenges").await);
+
+    let challenge_cols = column_names(&pool, "challenges").await;
+    for required in [
+        "id",
+        "from_player_id",
+        "opponent_player_id",
+        "link_token",
+        "time_class",
+        "initial_ms",
+        "increment_ms",
+        "rated",
+        "color_pref",
+        "expires_at",
+        "status",
+        "game_id",
+        "created_at",
+    ] {
+        assert!(
+            challenge_cols.iter().any(|col| col == required),
+            "challenges missing column {required}; have {challenge_cols:?}"
+        );
+    }
 
     let user_cols = column_names(&pool, "users").await;
     for required in [
