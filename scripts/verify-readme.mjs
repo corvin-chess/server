@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist|Protocol contract fixtures|Play protocol \/ WS)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist|Protocol contract fixtures|Play protocol \/ WS|Docker image)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
