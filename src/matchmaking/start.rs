@@ -139,6 +139,7 @@ pub async fn create_matched_game(
         // Clocks start at GameStart so flag claims have a baseline (CV-163).
         active_started_ms: now_ms,
         time_class: config.time_class.trim().to_ascii_lowercase(),
+        rated: config.rated,
         ..GameMeta::default()
     };
     create_game(conn, &game_id, &meta).await?;

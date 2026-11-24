@@ -56,6 +56,9 @@ pub struct GameMeta {
     /// Time class for abort first-move windows (ADR-005): bullet/blitz/rapid/classical/correspondence.
     #[serde(default = "default_time_class")]
     pub time_class: String,
+    /// When true, a terminal finish updates Glicko-2 once (CV-168). Abort never rates.
+    #[serde(default)]
+    pub rated: bool,
     /// Open draw/takeback offer, if any (CV-165).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_offer: Option<PendingOffer>,
@@ -102,6 +105,7 @@ impl Default for GameMeta {
             lag_one_way_w_ms: 0,
             lag_one_way_b_ms: 0,
             time_class: default_time_class(),
+            rated: false,
             pending_offer: None,
             prev_clock_w_ms: 0,
             prev_clock_b_ms: 0,
