@@ -140,6 +140,7 @@ async fn redis_create_append_reconstruct_fen() {
         &GameMeta {
             initial_fen: START_FEN.to_owned(),
             created_ms: 1_730_000_000_000,
+            ..GameMeta::default()
         },
     )
     .await
@@ -151,6 +152,7 @@ async fn redis_create_append_reconstruct_fen() {
         &GameMeta {
             initial_fen: START_FEN.to_owned(),
             created_ms: 1,
+            ..GameMeta::default()
         },
     )
     .await
@@ -207,6 +209,7 @@ async fn redis_game_ops_reject_invalid_game_id() {
     let meta = GameMeta {
         initial_fen: START_FEN.to_owned(),
         created_ms: 1,
+        ..GameMeta::default()
     };
     for bad in ["bad id", "a/b"] {
         assert!(matches!(

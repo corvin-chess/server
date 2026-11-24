@@ -15,6 +15,9 @@ pub const GAME_KEY_PREFIX: &str = "corvin:game:";
 /// Max game id length (ULID is 26; headroom for opaque ids).
 pub const MAX_GAME_ID_LEN: usize = 32;
 
+/// Max seat token length (matches apply_move player_id bound).
+pub const MAX_PLAYER_ID_LEN: usize = 64;
+
 /// Reject absurd FEN blobs before parse / Redis write (six-field FEN is far smaller).
 pub const MAX_FEN_LEN: usize = 128;
 
@@ -115,6 +118,11 @@ pub async fn create_game(
     if meta.initial_fen.len() > MAX_FEN_LEN || meta.initial_fen.is_empty() {
         return Err(GameLogError::InvalidFen(FenError::FieldCount));
     }
+    if meta.white_id.len() > MAX_PLAYER_ID_LEN || meta.black_id.len() > MAX_PLAYER_ID_LEN {
+        return Err(GameLogError::CorruptEvent(
+            "seat id exceeds max length".into(),
+        ));
+    }
     // Reject bad FEN before touching Redis so callers get a clear error.
     let _ = corvin_chess_core::Position::from_fen(&meta.initial_fen)
         .map_err(GameLogError::InvalidFen)?;
@@ -168,7 +176,7 @@ pub async fn append_move_event(
     if uci.is_empty() || uci.len() > MAX_UCI_LEN {
         return Err(GameLogError::InvalidUci(UciError::Invalid));
     }
-    // Shape-check UCI before storage; legality stays CV-162 (PROTOCOL MoveRejected).
+    // Shape-check UCI before storage; callers that need legality use `apply_move`.
     let _ = corvin_chess_core::Move::from_uci(uci).map_err(GameLogError::InvalidUci)?;
     let exists: bool = conn.exists(meta_key).await?;
     if !exists {

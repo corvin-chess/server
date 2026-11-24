@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -161,6 +161,7 @@ if (!statusTableMatch) {
   let sawAgeDefaultsBuilt = false
   let sawWsHelloBuilt = false
   let sawGameEventLogBuilt = false
+  let sawMoveApplyBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -201,6 +202,9 @@ if (!statusTableMatch) {
     if (/^Game event log$/i.test(area) && /^Built$/i.test(state)) {
       sawGameEventLogBuilt = true
     }
+    if (/^Move apply$/i.test(area) && /^Built$/i.test(state)) {
+      sawMoveApplyBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -224,6 +228,9 @@ if (!statusTableMatch) {
   }
   if (!sawGameEventLogBuilt) {
     fail('STATUS must include "| Game event log | Built |"')
+  }
+  if (!sawMoveApplyBuilt) {
+    fail('STATUS must include "| Move apply | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -399,6 +406,28 @@ if (
   )
 } else {
   ok("Game event log surface documented")
+}
+
+const applyRs = join(repoRoot, "src", "game", "apply.rs")
+const moveApplyTest = join(repoRoot, "tests", "move_apply.rs")
+if (!existsSync(applyRs) || !existsSync(moveApplyTest)) {
+  fail("Move apply sources missing (src/game/apply.rs, tests/move_apply.rs)")
+} else {
+  ok("Move apply sources present")
+}
+
+if (
+  !readme.includes("apply_move") ||
+  !readme.includes("MoveApplied") ||
+  !readme.includes("MoveRejected") ||
+  !readme.includes("move_apply") ||
+  !readme.includes("ILLEGAL_MOVE")
+) {
+  fail(
+    "README must document apply_move, MoveApplied/MoveRejected, ILLEGAL_MOVE, and move_apply tests"
+  )
+} else {
+  ok("Move apply surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
