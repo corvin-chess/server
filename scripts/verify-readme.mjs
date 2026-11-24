@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -159,6 +159,7 @@ if (!statusTableMatch) {
   let sawAuthBuilt = false
   let sawSessionCsrfBuilt = false
   let sawAgeDefaultsBuilt = false
+  let sawWsHelloBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -193,6 +194,9 @@ if (!statusTableMatch) {
     if (/^Age-appropriate defaults$/i.test(area) && /^Built$/i.test(state)) {
       sawAgeDefaultsBuilt = true
     }
+    if (/^WS Hello\/Welcome\/Ping$/i.test(area) && /^Built$/i.test(state)) {
+      sawWsHelloBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -210,6 +214,9 @@ if (!statusTableMatch) {
   }
   if (!sawAgeDefaultsBuilt) {
     fail('STATUS must include "| Age-appropriate defaults | Built |"')
+  }
+  if (!sawWsHelloBuilt) {
+    fail('STATUS must include "| WS Hello/Welcome/Ping | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -347,6 +354,25 @@ if (
   ok("Messaging prefs surface documented")
 }
 
+const wsMod = join(repoRoot, "src", "ws", "mod.rs")
+const wsHelloTest = join(repoRoot, "tests", "ws_hello.rs")
+if (!existsSync(wsMod) || !existsSync(wsHelloTest)) {
+  fail("WS handshake sources missing (src/ws/mod.rs, tests/ws_hello.rs)")
+} else {
+  ok("WS Hello/Welcome/Ping sources present")
+}
+
+if (
+  !readme.includes("/ws") ||
+  !readme.includes("Hello") ||
+  !readme.includes("Welcome") ||
+  !readme.includes("Ping")
+) {
+  fail("README must document /ws Hello/Welcome/Ping handshake")
+} else {
+  ok("WS handshake surface documented")
+}
+
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
   fail("Axum scaffold source missing (src/lib.rs, src/main.rs)")
 } else {
@@ -375,8 +401,10 @@ if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     fail("Cargo.toml must depend on sqlx for migrations")
   } else if (!cargo.includes("redis")) {
     fail("Cargo.toml must depend on redis for presence")
+  } else if (!/"ws"/.test(cargo) && !cargo.includes('"ws"')) {
+    fail('Cargo.toml axum must enable the "ws" feature')
   } else {
-    ok("Cargo.toml names corvin-server with axum, sqlx, and redis")
+    ok("Cargo.toml names corvin-server with axum (ws), sqlx, and redis")
   }
 }
 
