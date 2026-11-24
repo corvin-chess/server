@@ -11,6 +11,7 @@ use ulid::Ulid;
 
 use super::session::{auth_success_response, create_session};
 use super::AuthError;
+use crate::safety::default_messaging_prefs;
 use crate::AppState;
 
 const OTP_TTL_MINUTES: i64 = 10;
@@ -161,12 +162,16 @@ pub async fn otp_verify(
         .execute(&state.db)
         .await?;
 
-    let (user_id, username) = if purpose == "register" {
+    let (user_id, username, dm_enabled, public_chat_enabled) = if purpose == "register" {
         let username = username.ok_or(AuthError::BadRequest("missing username on OTP"))?;
         let user_id = Ulid::new().to_string();
+        let prefs = default_messaging_prefs(birth_year, Utc::now().date_naive());
         sqlx::query(
-            "INSERT INTO users (id, username, username_lower, email, email_lower, birth_year, locale)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO users (
+                id, username, username_lower, email, email_lower, birth_year, locale,
+                dm_enabled, public_chat_enabled
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(&user_id)
         .bind(&username)
@@ -175,6 +180,8 @@ pub async fn otp_verify(
         .bind(&email)
         .bind(birth_year)
         .bind(&locale)
+        .bind(prefs.dm_enabled)
+        .bind(prefs.public_chat_enabled)
         .execute(&state.db)
         .await
         .map_err(|err| {
@@ -184,20 +191,25 @@ pub async fn otp_verify(
                 AuthError::from(err)
             }
         })?;
-        (user_id, username)
+        (
+            user_id,
+            username,
+            prefs.dm_enabled,
+            prefs.public_chat_enabled,
+        )
     } else {
-        let row: Option<(String, String)> = sqlx::query_as(
-            "SELECT id, username FROM users
+        let row: Option<(String, String, bool, bool)> = sqlx::query_as(
+            "SELECT id, username, dm_enabled, public_chat_enabled FROM users
              WHERE email_lower = $1 AND deleted_at IS NULL
              LIMIT 1",
         )
         .bind(&email)
         .fetch_optional(&state.db)
         .await?;
-        let Some((user_id, username)) = row else {
+        let Some((user_id, username, dm_enabled, public_chat_enabled)) = row else {
             return Err(AuthError::Unauthorized);
         };
-        (user_id, username)
+        (user_id, username, dm_enabled, public_chat_enabled)
     };
 
     let tokens = create_session(&state.db, &user_id).await?;
@@ -206,6 +218,8 @@ pub async fn otp_verify(
         user_id,
         username,
         tokens,
+        dm_enabled,
+        public_chat_enabled,
     ))
 }
 

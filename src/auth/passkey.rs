@@ -16,8 +16,11 @@ use webauthn_rs::prelude::{
     RegisterPublicKeyCredential,
 };
 
+use chrono::Utc;
+
 use super::session::{auth_success_response, create_session};
 use super::AuthError;
+use crate::safety::default_messaging_prefs;
 use crate::AppState;
 
 const CHALLENGE_TTL: Duration = Duration::from_secs(300);
@@ -215,10 +218,14 @@ pub async fn register_finish(
         .map_err(|err| AuthError::Webauthn(err.to_string()))?;
 
     let user_id = Ulid::new().to_string();
+    let prefs = default_messaging_prefs(birth_year, Utc::now().date_naive());
     let mut tx = state.db.begin().await?;
     sqlx::query(
-        "INSERT INTO users (id, username, username_lower, email, email_lower, birth_year, locale)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO users (
+            id, username, username_lower, email, email_lower, birth_year, locale,
+            dm_enabled, public_chat_enabled
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(&user_id)
     .bind(&username)
@@ -227,6 +234,8 @@ pub async fn register_finish(
     .bind(&email)
     .bind(birth_year)
     .bind(&locale)
+    .bind(prefs.dm_enabled)
+    .bind(prefs.public_chat_enabled)
     .execute(&mut *tx)
     .await
     .map_err(|err| {
@@ -257,6 +266,8 @@ pub async fn register_finish(
         user_id,
         username,
         tokens,
+        prefs.dm_enabled,
+        prefs.public_chat_enabled,
     ))
 }
 
@@ -365,12 +376,23 @@ pub async fn login_finish(
         .await?;
     }
 
+    let flags: (bool, bool) = sqlx::query_as(
+        "SELECT dm_enabled, public_chat_enabled FROM users
+         WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(&user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AuthError::Unauthorized)?;
+
     let tokens = create_session(&state.db, &user_id).await?;
     Ok(auth_success_response(
         &state.rp_origin,
         user_id,
         username,
         tokens,
+        flags.0,
+        flags.1,
     ))
 }
 

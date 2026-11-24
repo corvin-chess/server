@@ -125,6 +125,8 @@ async fn migrate_up_creates_users_and_sessions_then_down_removes_them() {
         "email_lower",
         "birth_year",
         "locale",
+        "dm_enabled",
+        "public_chat_enabled",
         "created_at",
         "updated_at",
         "deleted_at",

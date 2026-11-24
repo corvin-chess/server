@@ -2,9 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod account;
 pub mod auth;
 pub mod db;
 pub mod redis_store;
+pub mod safety;
 
 use std::sync::Arc;
 
@@ -98,11 +100,12 @@ impl AppState {
     }
 }
 
-/// Full HTTP router including `/health` and `/api/v1/auth/*`.
+/// Full HTTP router including `/health`, `/api/v1/auth/*`, and `/api/v1/account/*`.
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .nest("/api/v1/auth", auth::router())
+        .nest("/api/v1/account", account::router())
         .with_state(state)
 }
 
