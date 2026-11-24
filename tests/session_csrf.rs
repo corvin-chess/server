@@ -377,10 +377,15 @@ async fn expired_session_is_rejected() {
     let cookie = cookie_pair(&set_cookie.expect("Set-Cookie"));
     let csrf = body["csrf_token"].as_str().expect("csrf_token").to_owned();
 
-    sqlx::query("UPDATE sessions SET expires_at = now() - interval '1 minute'")
-        .execute(&pool)
-        .await
-        .expect("expire sessions");
+    // Keep expires_at > created_at (table check) while both sit in the past.
+    sqlx::query(
+        "UPDATE sessions
+         SET created_at = now() - interval '2 minutes',
+             expires_at = now() - interval '1 minute'",
+    )
+    .execute(&pool)
+    .await
+    .expect("expire sessions");
 
     let (status, _, _) = json_request(
         corvin_server::app(state.clone()),
