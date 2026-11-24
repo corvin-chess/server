@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -165,6 +165,7 @@ if (!statusTableMatch) {
   let sawClocksBuilt = false
   let sawLagBuilt = false
   let sawOffersBuilt = false
+  let sawDrawClaimsBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -217,6 +218,9 @@ if (!statusTableMatch) {
     if (/^Offers$/i.test(area) && /^Built$/i.test(state)) {
       sawOffersBuilt = true
     }
+    if (/^Draw claims$/i.test(area) && /^Built$/i.test(state)) {
+      sawDrawClaimsBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -252,6 +256,9 @@ if (!statusTableMatch) {
   }
   if (!sawOffersBuilt) {
     fail('STATUS must include "| Offers | Built |"')
+  }
+  if (!sawDrawClaimsBuilt) {
+    fail('STATUS must include "| Draw claims | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -514,6 +521,28 @@ if (
   )
 } else {
   ok("Offers surface documented")
+}
+
+const claimsRs = join(repoRoot, "src", "game", "claims.rs")
+const claimsTest = join(repoRoot, "tests", "draw_claims.rs")
+if (!existsSync(claimsRs) || !existsSync(claimsTest)) {
+  fail("Draw claims sources missing (src/game/claims.rs, tests/draw_claims.rs)")
+} else {
+  ok("Draw claims sources present")
+}
+
+if (
+  !readme.includes("claim_draw") ||
+  !readme.includes("CLAIM_DENIED") ||
+  !readme.includes("threefold") ||
+  !readme.includes("fivefold") ||
+  !readme.includes("draw_claims")
+) {
+  fail(
+    "README must document claim_draw, CLAIM_DENIED, threefold/fivefold, and draw_claims tests"
+  )
+} else {
+  ok("Draw claims surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {

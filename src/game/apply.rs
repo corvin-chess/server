@@ -1,19 +1,21 @@
 //! Legal move apply with PROTOCOL MoveApplied / MoveRejected mapping (CV-162).
 //! Clocks tick + Fischer increment + flag-before-increment (CV-163 / ADR-005).
 //! Lag compensation from server-measured RTT (CV-164); never trusts client send time.
+//! Fivefold / seventy-five auto draws after a successful ply (CV-166).
 
 use std::fmt;
 
-use corvin_chess_core::{Color, Move, Position, UciError};
+use corvin_chess_core::{Color, Move, UciError};
 use redis::aio::ConnectionManager;
 use serde_json::{json, Value};
 
+use super::claims::{auto_draw_reason, position_with_prior_keys, record_auto_draw};
 use super::clock::{
     flag_outcome_for_position, is_flagged_at_compensated, tick_meta_on_move_compensated,
     write_flag_to_meta, write_tick_to_meta, ClockPair, ClockTick, FlagOutcome,
 };
 use super::lag::{credit_lag, LagCredit};
-use super::replay::replay_fen;
+use super::offers::GameEndOut;
 use super::store::{
     append_move_event, load_events, load_meta, save_meta, GameLogError, MAX_PLAYER_ID_LEN,
     MAX_UCI_LEN,
@@ -34,6 +36,8 @@ pub struct AppliedMove {
     pub seq: u64,
     /// Lag credit applied this ply (ms); `None` when zero / no RTT sample.
     pub lag_comp_ms: Option<u64>,
+    /// Set when the ply triggers an automatic draw (fivefold / seventy-five).
+    pub auto_draw: Option<GameEndOut>,
 }
 
 /// PROTOCOL `MoveRejected.code` values used by move apply.
@@ -232,8 +236,9 @@ pub async fn apply_move_with_rtt(
     };
 
     let events = load_events(conn, game_id).await?;
-    let fen = replay_fen(&meta.initial_fen, &events)?;
-    let pos = Position::from_fen(&fen).map_err(|err| ApplyError::Corrupt(err.to_string()))?;
+    // Same walk as FEN replay, but keep prior repetition keys for post-ply auto draws.
+    let (pos, prior) = position_with_prior_keys(&meta.initial_fen, &events)
+        .map_err(|err| ApplyError::Corrupt(err.to_string()))?;
 
     if pos.side_to_move() != seat {
         return Err(ApplyError::NotYourTurn);
@@ -265,6 +270,7 @@ pub async fn apply_move_with_rtt(
         },
         active_started_ms: meta.active_started_ms,
     };
+    let fen = pos.to_fen();
     // Flag before legality: out-of-time ends the game even on an illegal UCI.
     if let Some(color) = is_flagged_at_compensated(&peek, ts, lag_comp) {
         let outcome = flag_outcome_for_position(&fen, color).map_err(ApplyError::Corrupt)?;
@@ -338,11 +344,32 @@ pub async fn apply_move_with_rtt(
     // Align meta.active with post-move side to move (tick already switched).
     meta.active = color_active(next.side_to_move()).to_owned();
 
+    let mut prior_for_next = prior;
+    prior_for_next.push(pos.repetition_key());
+    // Detect auto-draw before Redis writes so meta.ended is set with the clock save
+    // (a failed AutoDraw append must not leave a live fivefold/seventy-five game).
+    let auto_reason = auto_draw_reason(&next, &prior_for_next);
+    if let Some(reason) = auto_reason {
+        meta.pending_offer = None;
+        meta.ended = true;
+        meta.ended_reason = Some(reason.to_owned());
+        meta.active_started_ms = 0;
+    }
+
     // Persist clocks before the ply so a failed RPUSH does not leave an orphan move
     // with stale clocks; a failed append after save leaves clocks ahead of the board
     // (recoverable by CV-171 atomic apply). Prefer that over move-without-clocks.
     save_meta(conn, game_id, &meta).await?;
     let seq = append_move_event(conn, game_id, uci, ts).await?;
+
+    let auto_draw = match auto_reason {
+        Some(reason) => Some(
+            record_auto_draw(conn, game_id, reason, ts)
+                .await
+                .map_err(|err| ApplyError::Corrupt(err.to_string()))?,
+        ),
+        None => None,
+    };
 
     Ok(AppliedMove {
         uci: uci.to_owned(),
@@ -353,5 +380,6 @@ pub async fn apply_move_with_rtt(
         active: color_active(next.side_to_move()),
         seq,
         lag_comp_ms: if lag_comp > 0 { Some(lag_comp) } else { None },
+        auto_draw,
     })
 }
