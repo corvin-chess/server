@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = "0.8"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "migrate", "macros"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 

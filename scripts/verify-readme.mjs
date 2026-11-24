@@ -22,7 +22,7 @@ const CLOSING =
 
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Auth|Matchmaking|Implementation)$/i
-const BUILT_AREAS = /^(README|Axum scaffold|Postgres migrations)$/i
+const BUILT_AREAS = /^(README|Axum scaffold|Postgres migrations|Redis presence)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -154,6 +154,7 @@ if (!statusTableMatch) {
   let sawReadmeBuilt = false
   let sawAxumBuilt = false
   let sawMigrationsBuilt = false
+  let sawRedisPresenceBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -176,6 +177,9 @@ if (!statusTableMatch) {
     if (/^Postgres migrations$/i.test(area) && /^Built$/i.test(state)) {
       sawMigrationsBuilt = true
     }
+    if (/^Redis presence$/i.test(area) && /^Built$/i.test(state)) {
+      sawRedisPresenceBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -186,6 +190,7 @@ if (!statusTableMatch) {
   if (!sawReadmeBuilt) fail('STATUS must include "| README | Built |"')
   if (!sawAxumBuilt) fail('STATUS must include "| Axum scaffold | Built |"')
   if (!sawMigrationsBuilt) fail('STATUS must include "| Postgres migrations | Built |"')
+  if (!sawRedisPresenceBuilt) fail('STATUS must include "| Redis presence | Built |"')
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
 }
@@ -219,6 +224,24 @@ if (
   ok("DATABASE_URL and migrate up/down documented")
 }
 
+if (
+  !readme.includes("REDIS_URL") ||
+  !readme.includes("corvin:presence:") ||
+  !readme.includes("touch_presence")
+) {
+  fail("README must document REDIS_URL and presence key helpers")
+} else {
+  ok("REDIS_URL and presence helpers documented")
+}
+
+const redisStoreRs = join(repoRoot, "src", "redis_store.rs")
+const presenceTest = join(repoRoot, "tests", "presence.rs")
+if (!existsSync(redisStoreRs) || !existsSync(presenceTest)) {
+  fail("Redis presence sources missing (src/redis_store.rs, tests/presence.rs)")
+} else {
+  ok("Redis presence sources present")
+}
+
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
   fail("Axum scaffold source missing (src/lib.rs, src/main.rs)")
 } else {
@@ -245,8 +268,10 @@ if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     fail("Cargo.toml must depend on axum")
   } else if (!cargo.includes("sqlx")) {
     fail("Cargo.toml must depend on sqlx for migrations")
+  } else if (!cargo.includes("redis")) {
+    fail("Cargo.toml must depend on redis for presence")
   } else {
-    ok("Cargo.toml names corvin-server with axum and sqlx")
+    ok("Cargo.toml names corvin-server with axum, sqlx, and redis")
   }
 }
 
