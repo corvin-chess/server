@@ -21,9 +21,9 @@ const CLOSING =
   "A move is real only when the server has written it down."
 
 const PLANNED_AREAS =
-  /^(Play protocol \/ WS|Implementation)$/i
+  /^(Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist|Protocol contract fixtures)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist|Protocol contract fixtures|Play protocol \/ WS)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -170,6 +170,7 @@ if (!statusTableMatch) {
   let sawRatingsBuilt = false
   let sawFinishedPersistBuilt = false
   let sawProtocolFixturesBuilt = false
+  let sawPlayProtocolBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -237,6 +238,9 @@ if (!statusTableMatch) {
     if (/^Protocol contract fixtures$/i.test(area) && /^Built$/i.test(state)) {
       sawProtocolFixturesBuilt = true
     }
+    if (/^Play protocol \/ WS$/i.test(area) && /^Built$/i.test(state)) {
+      sawPlayProtocolBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -287,6 +291,9 @@ if (!statusTableMatch) {
   }
   if (!sawProtocolFixturesBuilt) {
     fail('STATUS must include "| Protocol contract fixtures | Built |"')
+  }
+  if (!sawPlayProtocolBuilt) {
+    fail('STATUS must include "| Play protocol / WS | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -425,11 +432,19 @@ if (
 }
 
 const wsMod = join(repoRoot, "src", "ws", "mod.rs")
+const wsPlayRs = join(repoRoot, "src", "ws", "play.rs")
+const wsHubRs = join(repoRoot, "src", "ws", "hub.rs")
 const wsHelloTest = join(repoRoot, "tests", "ws_hello.rs")
+const wsPlayTest = join(repoRoot, "tests", "ws_play.rs")
 if (!existsSync(wsMod) || !existsSync(wsHelloTest)) {
   fail("WS handshake sources missing (src/ws/mod.rs, tests/ws_hello.rs)")
 } else {
   ok("WS Hello/Welcome/Ping sources present")
+}
+if (!existsSync(wsPlayRs) || !existsSync(wsHubRs) || !existsSync(wsPlayTest)) {
+  fail("WS play sources missing (src/ws/play.rs, hub.rs, tests/ws_play.rs)")
+} else {
+  ok("WS play wire sources present")
 }
 
 if (

@@ -1,7 +1,7 @@
 //! Quick pair pools and challenge links (CV-167 / PROTOCOL lobby).
 //!
 //! Redis holds ephemeral quick-pair queues; Postgres stores durable challenge rows.
-//! WS lobby dispatch stays Planned; helpers return PROTOCOL `GameStart` JSON for both seats.
+//! WS lobby dispatch is wired in `crate::ws` (CV-172); helpers return PROTOCOL `GameStart` JSON.
 
 mod challenge;
 mod color;

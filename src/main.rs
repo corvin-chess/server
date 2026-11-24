@@ -89,10 +89,18 @@ async fn run_server() -> Result<(), ExitCode> {
         eprintln!("database connect failed: {err}");
         ExitCode::FAILURE
     })?;
-    let state = corvin_server::AppState::from_env(pool).map_err(|err| {
-        eprintln!("auth state failed: {err}");
-        ExitCode::FAILURE
-    })?;
+    let redis = corvin_server::redis_store::connect_from_env()
+        .await
+        .map_err(|err| {
+            eprintln!("redis connect failed: {err}");
+            ExitCode::FAILURE
+        })?;
+    let state = corvin_server::AppState::from_env(pool)
+        .map_err(|err| {
+            eprintln!("auth state failed: {err}");
+            ExitCode::FAILURE
+        })?
+        .with_redis(redis);
 
     let listener = TcpListener::bind(addr).await.map_err(|err| {
         eprintln!("failed to bind {addr}: {err}");

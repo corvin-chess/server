@@ -19,6 +19,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
+use redis::aio::ConnectionManager;
 use sqlx::PgPool;
 use url::Url;
 use webauthn_rs::prelude::Webauthn;
@@ -28,6 +29,7 @@ use crate::auth::mailer::LogMailer;
 use crate::auth::passkey::PasskeyChallenges;
 use crate::auth::rate_limit::OtpStartLimiter;
 use crate::auth::SharedMailer;
+use crate::ws::PlayHub;
 
 /// Process-wide application state for HTTP handlers.
 #[derive(Clone)]
@@ -39,6 +41,10 @@ pub struct AppState {
     pub rp_origin: String,
     pub otp_pepper: Arc<Vec<u8>>,
     pub otp_rate_limit: Arc<OtpStartLimiter>,
+    /// Live Redis manager for play / presence (None in auth-only unit tests).
+    pub redis: Option<ConnectionManager>,
+    /// In-process WS fan-out for GameStart / MoveApplied (CV-172).
+    pub hub: Arc<PlayHub>,
 }
 
 impl AppState {
@@ -67,7 +73,15 @@ impl AppState {
             rp_origin: rp_origin.to_owned(),
             otp_pepper: Arc::new(otp_pepper),
             otp_rate_limit: Arc::new(OtpStartLimiter::new()),
+            redis: None,
+            hub: Arc::new(PlayHub::new()),
         })
+    }
+
+    /// Attach a Redis connection manager for play / presence (CV-172).
+    pub fn with_redis(mut self, redis: ConnectionManager) -> Self {
+        self.redis = Some(redis);
+        self
     }
 
     /// Test helper with an injected mailer.
