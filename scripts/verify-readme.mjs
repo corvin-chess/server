@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -158,6 +158,7 @@ if (!statusTableMatch) {
   let sawRedisPresenceBuilt = false
   let sawAuthBuilt = false
   let sawSessionCsrfBuilt = false
+  let sawAgeDefaultsBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -189,6 +190,9 @@ if (!statusTableMatch) {
     if (/^Session cookies \/ CSRF$/i.test(area) && /^Built$/i.test(state)) {
       sawSessionCsrfBuilt = true
     }
+    if (/^Age-appropriate defaults$/i.test(area) && /^Built$/i.test(state)) {
+      sawAgeDefaultsBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -203,6 +207,9 @@ if (!statusTableMatch) {
   if (!sawAuthBuilt) fail('STATUS must include "| Auth | Built |"')
   if (!sawSessionCsrfBuilt) {
     fail('STATUS must include "| Session cookies / CSRF | Built |"')
+  }
+  if (!sawAgeDefaultsBuilt) {
+    fail('STATUS must include "| Age-appropriate defaults | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -305,6 +312,39 @@ if (!existsSync(csrfRs) || !existsSync(sessionCsrfTest)) {
   fail("CSRF sources missing (src/auth/csrf.rs, tests/session_csrf.rs)")
 } else {
   ok("CSRF sources present")
+}
+
+const safetyRs = join(repoRoot, "src", "safety", "mod.rs")
+const accountMessagingRs = join(repoRoot, "src", "account", "messaging.rs")
+const ageDefaultsTest = join(repoRoot, "tests", "age_defaults.rs")
+const ageDefaultsUp = join(
+  repoRoot,
+  "migrations",
+  "20261124150000_age_defaults.up.sql"
+)
+if (
+  !existsSync(safetyRs) ||
+  !existsSync(accountMessagingRs) ||
+  !existsSync(ageDefaultsTest) ||
+  !existsSync(ageDefaultsUp)
+) {
+  fail(
+    "Age-defaults sources missing (src/safety, account/messaging, tests/age_defaults, migration)"
+  )
+} else {
+  ok("Age-appropriate defaults sources present")
+}
+
+if (
+  !readme.includes("/api/v1/account/messaging") ||
+  !readme.includes("dm_enabled") ||
+  !readme.includes("public_chat_enabled")
+) {
+  fail(
+    "README must document /api/v1/account/messaging and dm_enabled/public_chat_enabled"
+  )
+} else {
+  ok("Messaging prefs surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {

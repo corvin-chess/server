@@ -44,6 +44,9 @@ fn auth_source_modules_exist() {
         "auth/csrf.rs",
         "auth/mailer.rs",
         "auth/rate_limit.rs",
+        "safety/mod.rs",
+        "account/mod.rs",
+        "account/messaging.rs",
     ] {
         let path = src.join(rel);
         assert!(path.is_file(), "missing {}", path.display());

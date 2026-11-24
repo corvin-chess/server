@@ -30,6 +30,8 @@ pub struct AuthSuccess {
     pub user_id: String,
     pub username: String,
     pub csrf_token: String,
+    pub dm_enabled: bool,
+    pub public_chat_enabled: bool,
 }
 
 /// Create a durable opaque session row and return id + CSRF secret.
@@ -73,6 +75,8 @@ pub struct ActiveSession {
     pub user_id: String,
     pub username: String,
     pub csrf: [u8; 32],
+    pub dm_enabled: bool,
+    pub public_chat_enabled: bool,
 }
 
 /// Look up a non-expired, non-revoked session by raw id bytes.
@@ -80,8 +84,9 @@ pub async fn lookup_session(
     pool: &PgPool,
     session_id: &[u8; 32],
 ) -> Result<Option<ActiveSession>, sqlx::Error> {
-    let row: Option<(Vec<u8>, String, String, Vec<u8>)> = sqlx::query_as(
-        "SELECT s.id, u.id, u.username, s.csrf_secret
+    type SessionLookupRow = (Vec<u8>, String, String, Vec<u8>, bool, bool);
+    let row: Option<SessionLookupRow> = sqlx::query_as(
+        "SELECT s.id, u.id, u.username, s.csrf_secret, u.dm_enabled, u.public_chat_enabled
          FROM sessions s
          INNER JOIN users u ON u.id = s.user_id
          WHERE s.id = $1
@@ -93,16 +98,20 @@ pub async fn lookup_session(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.and_then(|(id_bytes, user_id, username, csrf_bytes)| {
-        let id: [u8; 32] = id_bytes.try_into().ok()?;
-        let csrf: [u8; 32] = csrf_bytes.try_into().ok()?;
-        Some(ActiveSession {
-            id,
-            user_id,
-            username,
-            csrf,
-        })
-    }))
+    Ok(row.and_then(
+        |(id_bytes, user_id, username, csrf_bytes, dm_enabled, public_chat_enabled)| {
+            let id: [u8; 32] = id_bytes.try_into().ok()?;
+            let csrf: [u8; 32] = csrf_bytes.try_into().ok()?;
+            Some(ActiveSession {
+                id,
+                user_id,
+                username,
+                csrf,
+                dm_enabled,
+                public_chat_enabled,
+            })
+        },
+    ))
 }
 
 /// Mark the session revoked so the cookie can no longer authenticate.
@@ -224,6 +233,8 @@ pub async fn get_session(
         user_id: session.user_id,
         username: session.username,
         csrf_token: csrf_token_hex(&session.csrf),
+        dm_enabled: session.dm_enabled,
+        public_chat_enabled: session.public_chat_enabled,
     }))
 }
 
@@ -268,11 +279,15 @@ pub fn auth_success_response(
     user_id: String,
     username: String,
     tokens: SessionTokens,
+    dm_enabled: bool,
+    public_chat_enabled: bool,
 ) -> Response {
     let body = AuthSuccess {
         user_id,
         username,
         csrf_token: csrf_token_hex(&tokens.csrf),
+        dm_enabled,
+        public_chat_enabled,
     };
     let builder = Response::builder().status(StatusCode::OK);
     let builder = set_session_cookie(builder, &tokens.id, rp_origin);
