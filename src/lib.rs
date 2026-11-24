@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod account;
+pub mod api;
 pub mod auth;
 pub mod db;
 pub mod game;
@@ -104,13 +105,14 @@ impl AppState {
     }
 }
 
-/// Full HTTP router including `/health`, `/ws`, `/api/v1/auth/*`, and `/api/v1/account/*`.
+/// Full HTTP router including `/health`, `/ws`, `/api/v1/auth/*`, `/api/v1/account/*`, and games.
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws::upgrade))
         .nest("/api/v1/auth", auth::router())
         .nest("/api/v1/account", account::router())
+        .nest("/api/v1", api::router())
         .with_state(state)
 }
 

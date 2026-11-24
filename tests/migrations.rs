@@ -118,6 +118,32 @@ async fn migrate_up_creates_users_and_sessions_then_down_removes_them() {
     assert!(table_exists(&pool, "challenges").await);
     assert!(table_exists(&pool, "ratings").await);
     assert!(table_exists(&pool, "rating_updates").await);
+    assert!(table_exists(&pool, "games").await);
+    assert!(table_exists(&pool, "game_events").await);
+
+    let games_cols = column_names(&pool, "games").await;
+    for required in [
+        "id",
+        "initial_fen",
+        "white_id",
+        "black_id",
+        "white_username",
+        "black_username",
+        "time_class",
+        "rated",
+        "initial_ms",
+        "increment_ms",
+        "result",
+        "reason",
+        "final_fen",
+        "created_ms",
+        "ended_at",
+    ] {
+        assert!(
+            games_cols.iter().any(|col| col == required),
+            "games missing column {required}; have {games_cols:?}"
+        );
+    }
 
     let rating_cols = column_names(&pool, "ratings").await;
     for required in [

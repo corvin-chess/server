@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -168,6 +168,7 @@ if (!statusTableMatch) {
   let sawDrawClaimsBuilt = false
   let sawMatchmakingBuilt = false
   let sawRatingsBuilt = false
+  let sawFinishedPersistBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -229,6 +230,9 @@ if (!statusTableMatch) {
     if (/^Ratings$/i.test(area) && /^Built$/i.test(state)) {
       sawRatingsBuilt = true
     }
+    if (/^Finished game persist$/i.test(area) && /^Built$/i.test(state)) {
+      sawFinishedPersistBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -273,6 +277,9 @@ if (!statusTableMatch) {
   }
   if (!sawRatingsBuilt) {
     fail('STATUS must include "| Ratings | Built |"')
+  }
+  if (!sawFinishedPersistBuilt) {
+    fail('STATUS must include "| Finished game persist | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -618,6 +625,39 @@ if (
   )
 } else {
   ok("Ratings surface documented")
+}
+
+const persistRs = join(repoRoot, "src", "game", "persist.rs")
+const pgnRs = join(repoRoot, "src", "game", "pgn.rs")
+const persistTest = join(repoRoot, "tests", "persist_game.rs")
+const gamesUp = join(repoRoot, "migrations", "20261124210000_games.up.sql")
+const apiGames = join(repoRoot, "src", "api", "games.rs")
+if (
+  !existsSync(persistRs) ||
+  !existsSync(pgnRs) ||
+  !existsSync(persistTest) ||
+  !existsSync(gamesUp) ||
+  !existsSync(apiGames)
+) {
+  fail(
+    "Finished game persist sources missing (persist.rs, pgn.rs, persist_game.rs, games migration, api/games.rs)"
+  )
+} else {
+  ok("Finished game persist sources present")
+}
+
+if (
+  !readme.includes("persist_finished_game") ||
+  !readme.includes("export_pgn") ||
+  !readme.includes("/api/v1/games/") ||
+  !readme.includes("game_events") ||
+  !readme.includes("persist_game")
+) {
+  fail(
+    "README must document persist_finished_game, export_pgn, /api/v1/games/, game_events, and persist_game tests"
+  )
+} else {
+  ok("Finished game persist surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
