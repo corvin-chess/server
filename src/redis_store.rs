@@ -1,7 +1,7 @@
 //! Redis connection helpers and online presence keys (CV-132).
 //!
 //! Presence is ephemeral: a key per user with a short TTL refreshed by heartbeats.
-//! Game/lobby keys stay out of this module (later CV-161+).
+//! Live game event logs live in `crate::game` (CV-161); lobby keys come later.
 
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, Client, RedisError};
