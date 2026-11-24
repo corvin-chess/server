@@ -4,11 +4,13 @@
 //! Legal apply + PROTOCOL MoveRejected codes: CV-162.
 //! Clocks + Fischer increment + flag: CV-163 / ADR-005.
 //! Lag compensation quota from server RTT: CV-164.
+//! Draw / takeback / resign / abort: CV-165.
 
 mod apply;
 mod clock;
 mod events;
 mod lag;
+mod offers;
 mod replay;
 mod store;
 
@@ -21,15 +23,20 @@ pub use clock::{
     is_flagged_at, is_flagged_at_compensated, remaining_at, tick_on_move, tick_on_move_compensated,
     ClockPair, ClockTick, FlagClaimError, FlagOutcome,
 };
-pub use events::{GameEvent, GameMeta, MoveEvent, START_FEN};
+pub use events::{GameEvent, GameMeta, MoveEvent, PendingOffer, START_FEN};
 pub use lag::{
     active_seat_credit_ms, credit_lag, effective_elapsed_ms, estimated_game_ms, initial_quota_ms,
     peek_credit_ms, seed_lag_quotas, LagCredit, LagTracker, ESTIMATE_INC_MOVES, QUOTA_CAP_MS,
     QUOTA_FLOOR_MS,
 };
-pub use replay::replay_fen;
+pub use offers::{
+    abort, abort_allowed, abort_window_ms, game_end_offer_json, offer_draw, offer_error_json,
+    offer_state_json, offer_takeback, resign, respond_offer, GameEndOut, OfferError, OfferOutcome,
+    OfferRejectCode, OfferStateOut, OFFER_DRAW, OFFER_TAKEBACK,
+};
+pub use replay::{net_move_events, replay_fen};
 pub use store::{
-    append_move_event, create_game, delete_game, game_events_key, game_meta_key, load_events,
-    load_meta, reconstruct_fen, save_meta, GameLogError, GAME_KEY_PREFIX, MAX_EVENTS, MAX_FEN_LEN,
-    MAX_GAME_ID_LEN, MAX_PLAYER_ID_LEN, MAX_UCI_LEN,
+    append_game_event, append_move_event, create_game, delete_game, game_events_key, game_meta_key,
+    load_events, load_meta, reconstruct_fen, save_meta, GameLogError, GAME_KEY_PREFIX, MAX_EVENTS,
+    MAX_EVENT_BYTES, MAX_FEN_LEN, MAX_GAME_ID_LEN, MAX_META_BYTES, MAX_PLAYER_ID_LEN, MAX_UCI_LEN,
 };

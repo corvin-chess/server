@@ -5,6 +5,15 @@ use serde::{Deserialize, Serialize};
 /// Standard chess starting position FEN (six fields).
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
+/// Pending draw or takeback offer (cleared on move apply or response).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingOffer {
+    /// `"draw"` or `"takeback"`.
+    pub kind: String,
+    /// Seat that created the offer (`"w"` / `"b"`).
+    pub by: String,
+}
+
 /// Durable-enough live meta for a Redis game (initial FEN + seats + clocks).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameMeta {
@@ -44,12 +53,36 @@ pub struct GameMeta {
     /// Last server-measured one-way lag estimate for Black (ms).
     #[serde(default)]
     pub lag_one_way_b_ms: u64,
+    /// Time class for abort first-move windows (ADR-005): bullet/blitz/rapid/classical/correspondence.
+    #[serde(default = "default_time_class")]
+    pub time_class: String,
+    /// Open draw/takeback offer, if any (CV-165).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_offer: Option<PendingOffer>,
+    /// Clock snapshot before the last accepted ply (one-ply takeback restore).
+    #[serde(default)]
+    pub prev_clock_w_ms: u64,
+    #[serde(default)]
+    pub prev_clock_b_ms: u64,
+    #[serde(default)]
+    pub prev_active: String,
+    #[serde(default)]
+    pub prev_active_started_ms: u64,
+    /// Lag quota snapshot before the last accepted ply (restored on takeback).
+    #[serde(default)]
+    pub prev_lag_quota_w_ms: u64,
+    #[serde(default)]
+    pub prev_lag_quota_b_ms: u64,
     /// True after a terminal result (flag, resign, …) has been recorded.
     #[serde(default)]
     pub ended: bool,
     /// Short reason when `ended` (e.g. `flag`); omitted while live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_reason: Option<String>,
+}
+
+fn default_time_class() -> String {
+    "blitz".to_owned()
 }
 
 impl Default for GameMeta {
@@ -68,6 +101,14 @@ impl Default for GameMeta {
             lag_quota_b_ms: 0,
             lag_one_way_w_ms: 0,
             lag_one_way_b_ms: 0,
+            time_class: default_time_class(),
+            pending_offer: None,
+            prev_clock_w_ms: 0,
+            prev_clock_b_ms: 0,
+            prev_active: String::new(),
+            prev_active_started_ms: 0,
+            prev_lag_quota_w_ms: 0,
+            prev_lag_quota_b_ms: 0,
             ended: false,
             ended_reason: None,
         }
@@ -82,20 +123,66 @@ pub struct MoveEvent {
     pub ts: u64,
 }
 
-/// Append-only game events. Only `Move` changes the board for FEN replay.
+/// Append-only game events. Only `Move` changes the board for FEN replay
+/// (and `Takeback` undoes the latest net Move; see `replay_fen`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "typ")]
 pub enum GameEvent {
     #[serde(rename = "Move")]
-    Move { seq: u64, uci: String, ts: u64 },
+    Move {
+        seq: u64,
+        uci: String,
+        ts: u64,
+    },
     /// Non-position note (pairing, admin). Ignored by FEN replay.
-    ServerNote { seq: u64, text: String, ts: u64 },
+    ServerNote {
+        seq: u64,
+        text: String,
+        ts: u64,
+    },
+    /// Draw or takeback offered (audit; pending also mirrored on meta).
+    Offer {
+        seq: u64,
+        kind: String,
+        by: String,
+        ts: u64,
+    },
+    /// Accept/decline/withdraw of a pending offer.
+    OfferResponse {
+        seq: u64,
+        kind: String,
+        by: String,
+        accept: bool,
+        ts: u64,
+    },
+    Resign {
+        seq: u64,
+        by: String,
+        ts: u64,
+    },
+    Abort {
+        seq: u64,
+        by: String,
+        ts: u64,
+    },
+    /// Undo the net Move with `undone_seq` (replay pops that ply).
+    Takeback {
+        seq: u64,
+        undone_seq: u64,
+        ts: u64,
+    },
 }
 
 impl GameEvent {
     pub fn seq(&self) -> u64 {
         match self {
-            Self::Move { seq, .. } | Self::ServerNote { seq, .. } => *seq,
+            Self::Move { seq, .. }
+            | Self::ServerNote { seq, .. }
+            | Self::Offer { seq, .. }
+            | Self::OfferResponse { seq, .. }
+            | Self::Resign { seq, .. }
+            | Self::Abort { seq, .. }
+            | Self::Takeback { seq, .. } => *seq,
         }
     }
 

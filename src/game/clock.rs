@@ -407,6 +407,7 @@ pub fn write_flag_to_meta(meta: &mut super::events::GameMeta, color: &str, pair:
     }
     meta.ended = true;
     meta.ended_reason = Some("flag".to_owned());
+    meta.pending_offer = None;
 }
 
 #[cfg(test)]

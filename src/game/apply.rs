@@ -275,6 +275,7 @@ pub async fn apply_move_with_rtt(
             zeroed.b_ms = 0;
         }
         write_flag_to_meta(&mut meta, color, &zeroed);
+        meta.pending_offer = None;
         meta.ended_reason = Some(format!("flag:{}", outcome.result));
         save_meta(conn, game_id, &meta).await?;
         return Err(ApplyError::Flagged { outcome });
@@ -290,12 +291,26 @@ pub async fn apply_move_with_rtt(
         .ok_or_else(|| ApplyError::IllegalMove(uci.to_owned()))?;
     let next_fen = next.to_fen();
 
+    // Snapshot clocks + lag quotas for one-ply takeback; clear pending offers (CV-165).
+    meta.prev_clock_w_ms = meta.clock_w_ms;
+    meta.prev_clock_b_ms = meta.clock_b_ms;
+    meta.prev_active = if meta.active.is_empty() {
+        board_active.to_owned()
+    } else {
+        meta.active.clone()
+    };
+    meta.prev_active_started_ms = meta.active_started_ms;
+    meta.prev_lag_quota_w_ms = meta.lag_quota_w_ms;
+    meta.prev_lag_quota_b_ms = meta.lag_quota_b_ms;
+    meta.pending_offer = None;
+
     // Deduct effective elapsed then add Fischer increment (ADR-005).
     match tick_meta_on_move_compensated(&meta, seat, ts, lag_comp) {
         ClockTick::Flagged { color, clocks } => {
             // Same `ts` as peek should not flag; treat as internal fault.
             let outcome = flag_outcome_for_position(&fen, color).map_err(ApplyError::Corrupt)?;
             write_flag_to_meta(&mut meta, color, &clocks);
+            meta.pending_offer = None;
             meta.ended_reason = Some(format!("flag:{}", outcome.result));
             save_meta(conn, game_id, &meta).await?;
             return Err(ApplyError::Flagged { outcome });
