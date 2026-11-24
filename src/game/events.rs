@@ -5,11 +5,36 @@ use serde::{Deserialize, Serialize};
 /// Standard chess starting position FEN (six fields).
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-/// Durable-enough live meta for a Redis game (initial FEN + create time).
+/// Durable-enough live meta for a Redis game (initial FEN + seats + stub clocks).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameMeta {
     pub initial_fen: String,
     pub created_ms: u64,
+    /// Opaque seat token for White (session/user id). Empty until seated.
+    #[serde(default)]
+    pub white_id: String,
+    /// Opaque seat token for Black (session/user id). Empty until seated.
+    #[serde(default)]
+    pub black_id: String,
+    /// Remaining White clock ms (stub until CV-163 ticks).
+    #[serde(default)]
+    pub clock_w_ms: u64,
+    /// Remaining Black clock ms (stub until CV-163 ticks).
+    #[serde(default)]
+    pub clock_b_ms: u64,
+}
+
+impl Default for GameMeta {
+    fn default() -> Self {
+        Self {
+            initial_fen: START_FEN.to_owned(),
+            created_ms: 0,
+            white_id: String::new(),
+            black_id: String::new(),
+            clock_w_ms: 0,
+            clock_b_ms: 0,
+        }
+    }
 }
 
 /// A single ply applied to the position (UCI long algebraic).
