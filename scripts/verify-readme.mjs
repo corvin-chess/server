@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -160,6 +160,7 @@ if (!statusTableMatch) {
   let sawSessionCsrfBuilt = false
   let sawAgeDefaultsBuilt = false
   let sawWsHelloBuilt = false
+  let sawGameEventLogBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -197,6 +198,9 @@ if (!statusTableMatch) {
     if (/^WS Hello\/Welcome\/Ping$/i.test(area) && /^Built$/i.test(state)) {
       sawWsHelloBuilt = true
     }
+    if (/^Game event log$/i.test(area) && /^Built$/i.test(state)) {
+      sawGameEventLogBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -217,6 +221,9 @@ if (!statusTableMatch) {
   }
   if (!sawWsHelloBuilt) {
     fail('STATUS must include "| WS Hello/Welcome/Ping | Built |"')
+  }
+  if (!sawGameEventLogBuilt) {
+    fail('STATUS must include "| Game event log | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -373,6 +380,27 @@ if (
   ok("WS handshake surface documented")
 }
 
+const gameMod = join(repoRoot, "src", "game", "mod.rs")
+const gameEventLogTest = join(repoRoot, "tests", "game_event_log.rs")
+if (!existsSync(gameMod) || !existsSync(gameEventLogTest)) {
+  fail("Game event log sources missing (src/game/mod.rs, tests/game_event_log.rs)")
+} else {
+  ok("Game event log sources present")
+}
+
+if (
+  !readme.includes("corvin:game:") ||
+  !readme.includes("reconstruct_fen") ||
+  !readme.includes("append_move_event") ||
+  !readme.includes("game_event_log")
+) {
+  fail(
+    "README must document corvin:game: keys, reconstruct_fen, append_move_event, and game_event_log tests"
+  )
+} else {
+  ok("Game event log surface documented")
+}
+
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
   fail("Axum scaffold source missing (src/lib.rs, src/main.rs)")
 } else {
@@ -401,10 +429,12 @@ if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     fail("Cargo.toml must depend on sqlx for migrations")
   } else if (!cargo.includes("redis")) {
     fail("Cargo.toml must depend on redis for presence")
+  } else if (!cargo.includes("corvin-chess-core")) {
+    fail("Cargo.toml must depend on corvin-chess-core for FEN replay")
   } else if (!/"ws"/.test(cargo) && !cargo.includes('"ws"')) {
     fail('Cargo.toml axum must enable the "ws" feature')
   } else {
-    ok("Cargo.toml names corvin-server with axum (ws), sqlx, and redis")
+    ok("Cargo.toml names corvin-server with axum (ws), sqlx, redis, and chess-core")
   }
 }
 

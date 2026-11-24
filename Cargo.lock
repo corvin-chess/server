@@ -458,12 +458,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "corvin-chess-core"
+version = "0.1.0"
+source = "git+https://github.com/corvin-chess/chess-core.git?rev=f20f50217cd173a35b197876471af9802dbb6403#f20f50217cd173a35b197876471af9802dbb6403"
+
+[[package]]
 name = "corvin-server"
 version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "corvin-chess-core",
  "futures-util",
  "hex",
  "http-body-util",

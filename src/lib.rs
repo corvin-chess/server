@@ -1,10 +1,11 @@
-//! Corvin game server library surface (HTTP router + Postgres + Redis presence + auth + WS).
+//! Corvin game server library surface (HTTP router + Postgres + Redis presence/game log + auth + WS).
 
 #![forbid(unsafe_code)]
 
 pub mod account;
 pub mod auth;
 pub mod db;
+pub mod game;
 pub mod redis_store;
 pub mod safety;
 pub mod ws;
