@@ -85,6 +85,15 @@ async fn run_server() -> Result<(), ExitCode> {
         .parse()
         .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], port)));
 
+    let pool = corvin_server::db::connect_from_env().await.map_err(|err| {
+        eprintln!("database connect failed: {err}");
+        ExitCode::FAILURE
+    })?;
+    let state = corvin_server::AppState::from_env(pool).map_err(|err| {
+        eprintln!("auth state failed: {err}");
+        ExitCode::FAILURE
+    })?;
+
     let listener = TcpListener::bind(addr).await.map_err(|err| {
         eprintln!("failed to bind {addr}: {err}");
         ExitCode::FAILURE
@@ -95,7 +104,7 @@ async fn run_server() -> Result<(), ExitCode> {
     })?;
     eprintln!("corvin-server listening on http://{bound}");
 
-    axum::serve(listener, corvin_server::app())
+    axum::serve(listener, corvin_server::app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|err| {

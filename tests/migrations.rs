@@ -1,5 +1,7 @@
 //! CV-131: Postgres migrations for users/sessions must migrate up and down.
 
+mod common;
+
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -93,7 +95,7 @@ async fn migrate_up_creates_users_and_sessions_then_down_removes_them() {
         );
         return;
     };
-
+    let _lock = common::acquire_db_lock(&url).await;
     let pool = connect(&url).await;
 
     // Start from a clean public schema for this integration DB.
@@ -102,6 +104,8 @@ async fn migrate_up_creates_users_and_sessions_then_down_removes_them() {
         .expect("migrate_down before up");
     assert!(!table_exists(&pool, "users").await);
     assert!(!table_exists(&pool, "sessions").await);
+    assert!(!table_exists(&pool, "passkeys").await);
+    assert!(!table_exists(&pool, "email_otps").await);
 
     corvin_server::db::migrate_up(&pool)
         .await
@@ -109,6 +113,8 @@ async fn migrate_up_creates_users_and_sessions_then_down_removes_them() {
 
     assert!(table_exists(&pool, "users").await);
     assert!(table_exists(&pool, "sessions").await);
+    assert!(table_exists(&pool, "passkeys").await);
+    assert!(table_exists(&pool, "email_otps").await);
 
     let user_cols = column_names(&pool, "users").await;
     for required in [

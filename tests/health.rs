@@ -7,7 +7,7 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn health_returns_200_ok_body() {
-    let app = corvin_server::app();
+    let app = corvin_server::health_router();
     let response = app
         .oneshot(
             Request::builder()
@@ -31,7 +31,7 @@ async fn health_returns_200_ok_body() {
 
 #[tokio::test]
 async fn unknown_path_returns_404() {
-    let app = corvin_server::app();
+    let app = corvin_server::health_router();
     let response = app
         .oneshot(
             Request::builder()

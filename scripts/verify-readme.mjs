@@ -21,8 +21,9 @@ const CLOSING =
   "A move is real only when the server has written it down."
 
 const PLANNED_AREAS =
-  /^(Play protocol \/ WS|Auth|Matchmaking|Implementation)$/i
-const BUILT_AREAS = /^(README|Axum scaffold|Postgres migrations|Redis presence)$/i
+  /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
+const BUILT_AREAS =
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -155,6 +156,7 @@ if (!statusTableMatch) {
   let sawAxumBuilt = false
   let sawMigrationsBuilt = false
   let sawRedisPresenceBuilt = false
+  let sawAuthBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -180,6 +182,9 @@ if (!statusTableMatch) {
     if (/^Redis presence$/i.test(area) && /^Built$/i.test(state)) {
       sawRedisPresenceBuilt = true
     }
+    if (/^Auth$/i.test(area) && /^Built$/i.test(state)) {
+      sawAuthBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -191,6 +196,7 @@ if (!statusTableMatch) {
   if (!sawAxumBuilt) fail('STATUS must include "| Axum scaffold | Built |"')
   if (!sawMigrationsBuilt) fail('STATUS must include "| Postgres migrations | Built |"')
   if (!sawRedisPresenceBuilt) fail('STATUS must include "| Redis presence | Built |"')
+  if (!sawAuthBuilt) fail('STATUS must include "| Auth | Built |"')
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
 }
@@ -240,6 +246,36 @@ if (!existsSync(redisStoreRs) || !existsSync(presenceTest)) {
   fail("Redis presence sources missing (src/redis_store.rs, tests/presence.rs)")
 } else {
   ok("Redis presence sources present")
+}
+
+const authMod = join(repoRoot, "src", "auth", "mod.rs")
+const authOtpTest = join(repoRoot, "tests", "auth_email_otp.rs")
+const authPasskeyTest = join(repoRoot, "tests", "auth_passkey.rs")
+const authMigrationUp = join(
+  repoRoot,
+  "migrations",
+  "20261124120000_passkeys_email_otps.up.sql"
+)
+if (
+  !existsSync(authMod) ||
+  !existsSync(authOtpTest) ||
+  !existsSync(authPasskeyTest) ||
+  !existsSync(authMigrationUp)
+) {
+  fail("Auth sources missing (src/auth, auth tests, passkeys/email_otps migration)")
+} else {
+  ok("Auth sources present")
+}
+
+if (
+  !readme.includes("/api/v1/auth") ||
+  !readme.includes("passkey") ||
+  !readme.includes("OTP") ||
+  !readme.includes("CORVIN_RP_ORIGIN")
+) {
+  fail("README must document /api/v1/auth, passkey/OTP, and CORVIN_RP_ORIGIN")
+} else {
+  ok("Auth endpoints and RP env documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
