@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -163,6 +163,7 @@ if (!statusTableMatch) {
   let sawGameEventLogBuilt = false
   let sawMoveApplyBuilt = false
   let sawClocksBuilt = false
+  let sawLagBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -209,6 +210,9 @@ if (!statusTableMatch) {
     if (/^Clocks$/i.test(area) && /^Built$/i.test(state)) {
       sawClocksBuilt = true
     }
+    if (/^Lag compensation$/i.test(area) && /^Built$/i.test(state)) {
+      sawLagBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -238,6 +242,9 @@ if (!statusTableMatch) {
   }
   if (!sawClocksBuilt) {
     fail('STATUS must include "| Clocks | Built |"')
+  }
+  if (!sawLagBuilt) {
+    fail('STATUS must include "| Lag compensation | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -457,6 +464,27 @@ if (
   )
 } else {
   ok("Clocks surface documented")
+}
+
+const lagRs = join(repoRoot, "src", "game", "lag.rs")
+const lagTest = join(repoRoot, "tests", "lag_quota.rs")
+if (!existsSync(lagRs) || !existsSync(lagTest)) {
+  fail("Lag compensation sources missing (src/game/lag.rs, tests/lag_quota.rs)")
+} else {
+  ok("Lag compensation sources present")
+}
+
+if (
+  !readme.includes("lag_comp_ms") ||
+  !readme.includes("apply_move_with_rtt") ||
+  !readme.includes("lag_quota") ||
+  !readme.includes("LagTracker")
+) {
+  fail(
+    "README must document lag_comp_ms, apply_move_with_rtt, lag_quota tests, and LagTracker"
+  )
+} else {
+  ok("Lag compensation surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {
