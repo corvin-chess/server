@@ -2,7 +2,7 @@
 name = "corvin-server"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.89"
 license = "AGPL-3.0-or-later"
 description = "Corvin real-time game server: lobby, rated play, tournaments, and HTTP API"
 repository = "https://github.com/corvin-chess/server"
@@ -16,11 +16,23 @@ name = "corvin-server"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["json", "macros"] }
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "migrate", "macros"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "migrate", "macros", "json", "chrono"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+ulid = "1"
+url = "2"
+uuid = { version = "1", features = ["serde"] }
+webauthn-rs = { version = "0.6.2", default-features = false, features = ["danger-allow-state-serialisation"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+webauthn-authenticator-rs = { version = "0.6.2", default-features = false, features = ["softpasskey"] }
