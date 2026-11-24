@@ -21,9 +21,9 @@ const CLOSING =
   "A move is real only when the server has written it down."
 
 const PLANNED_AREAS =
-  /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
+  /^(Play protocol \/ WS|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -166,6 +166,7 @@ if (!statusTableMatch) {
   let sawLagBuilt = false
   let sawOffersBuilt = false
   let sawDrawClaimsBuilt = false
+  let sawMatchmakingBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -221,6 +222,9 @@ if (!statusTableMatch) {
     if (/^Draw claims$/i.test(area) && /^Built$/i.test(state)) {
       sawDrawClaimsBuilt = true
     }
+    if (/^Matchmaking$/i.test(area) && /^Built$/i.test(state)) {
+      sawMatchmakingBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -259,6 +263,9 @@ if (!statusTableMatch) {
   }
   if (!sawDrawClaimsBuilt) {
     fail('STATUS must include "| Draw claims | Built |"')
+  }
+  if (!sawMatchmakingBuilt) {
+    fail('STATUS must include "| Matchmaking | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -543,6 +550,34 @@ if (
   )
 } else {
   ok("Draw claims surface documented")
+}
+
+const matchMod = join(repoRoot, "src", "matchmaking", "mod.rs")
+const matchTest = join(repoRoot, "tests", "matchmaking.rs")
+const challengeUp = join(
+  repoRoot,
+  "migrations",
+  "20261124180000_challenges.up.sql"
+)
+if (!existsSync(matchMod) || !existsSync(matchTest) || !existsSync(challengeUp)) {
+  fail(
+    "Matchmaking sources missing (src/matchmaking/, tests/matchmaking.rs, challenges migration)"
+  )
+} else {
+  ok("Matchmaking sources present")
+}
+
+if (
+  !readme.includes("quick_pair") ||
+  !readme.includes("GameStart") ||
+  !readme.includes("challenge_create_link") ||
+  !readme.includes("matchmaking")
+) {
+  fail(
+    "README must document quick_pair, GameStart, challenge_create_link, and matchmaking tests"
+  )
+} else {
+  ok("Matchmaking surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {

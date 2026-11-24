@@ -6,6 +6,7 @@ pub mod account;
 pub mod auth;
 pub mod db;
 pub mod game;
+pub mod matchmaking;
 pub mod redis_store;
 pub mod safety;
 pub mod ws;
