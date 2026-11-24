@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -164,6 +164,7 @@ if (!statusTableMatch) {
   let sawMoveApplyBuilt = false
   let sawClocksBuilt = false
   let sawLagBuilt = false
+  let sawOffersBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -213,6 +214,9 @@ if (!statusTableMatch) {
     if (/^Lag compensation$/i.test(area) && /^Built$/i.test(state)) {
       sawLagBuilt = true
     }
+    if (/^Offers$/i.test(area) && /^Built$/i.test(state)) {
+      sawOffersBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -245,6 +249,9 @@ if (!statusTableMatch) {
   }
   if (!sawLagBuilt) {
     fail('STATUS must include "| Lag compensation | Built |"')
+  }
+  if (!sawOffersBuilt) {
+    fail('STATUS must include "| Offers | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -485,6 +492,28 @@ if (
   )
 } else {
   ok("Lag compensation surface documented")
+}
+
+const offersRs = join(repoRoot, "src", "game", "offers.rs")
+const offersTest = join(repoRoot, "tests", "offers.rs")
+if (!existsSync(offersRs) || !existsSync(offersTest)) {
+  fail("Offers sources missing (src/game/offers.rs, tests/offers.rs)")
+} else {
+  ok("Offers sources present")
+}
+
+if (
+  !readme.includes("offer_draw") ||
+  !readme.includes("OfferState") ||
+  !readme.includes("ABORT_DENIED") ||
+  !readme.includes("OFFER_INVALID") ||
+  !readme.includes("offers")
+) {
+  fail(
+    "README must document offer_draw, OfferState, OFFER_INVALID/ABORT_DENIED, and offers tests"
+  )
+} else {
+  ok("Offers surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {

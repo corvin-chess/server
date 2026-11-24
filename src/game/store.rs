@@ -27,6 +27,12 @@ pub const MAX_UCI_LEN: usize = 8;
 /// Hard cap on live event list length for a single reconstruct (DoS bound).
 pub const MAX_EVENTS: usize = 1024;
 
+/// Meta JSON DoS bound (offers + prev clocks grow the payload; CV-165).
+pub const MAX_META_BYTES: usize = 2048;
+
+/// Single event JSON DoS bound.
+pub const MAX_EVENT_BYTES: usize = 512;
+
 /// Errors from game log create / append / replay.
 #[derive(Debug)]
 pub enum GameLogError {
@@ -158,8 +164,8 @@ pub async fn load_meta(
     let (meta_key, _) = require_keys(game_id)?;
     let raw: Option<String> = conn.get(meta_key).await?;
     let raw = raw.ok_or(GameLogError::GameGone)?;
-    // Clock fields grew the payload; keep a hard DoS bound.
-    if raw.len() > 1024 {
+    // Clock/offer fields grew the payload; keep a hard DoS bound.
+    if raw.len() > MAX_META_BYTES {
         return Err(GameLogError::CorruptEvent("meta payload too large".into()));
     }
     let meta: GameMeta =
@@ -195,29 +201,24 @@ pub async fn save_meta(
     }
     let payload =
         serde_json::to_string(meta).map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
-    if payload.len() > 1024 {
+    if payload.len() > MAX_META_BYTES {
         return Err(GameLogError::CorruptEvent("meta payload too large".into()));
     }
     let _: () = conn.set(meta_key, payload).await?;
     Ok(())
 }
 
-/// Append a Move event; returns the new monotonic `seq` (1-based list length).
+/// Append any game event; assigns monotonic `seq` (1-based list length) and returns it.
 ///
+/// Pass `seq: 0` on the event; the stored value is overwritten with the list length.
 /// Assumes single-writer ownership per game (live match node). Concurrent
-/// appenders can race LLEN/RPUSH; CV-162+ can tighten with a Lua script.
-pub async fn append_move_event(
+/// appenders can race LLEN/RPUSH; CV-171 can tighten with a Lua script.
+pub async fn append_game_event(
     conn: &mut ConnectionManager,
     game_id: &str,
-    uci: &str,
-    ts: u64,
+    mut event: GameEvent,
 ) -> Result<u64, GameLogError> {
     let (meta_key, events_key) = require_keys(game_id)?;
-    if uci.is_empty() || uci.len() > MAX_UCI_LEN {
-        return Err(GameLogError::InvalidUci(UciError::Invalid));
-    }
-    // Shape-check UCI before storage; callers that need legality use `apply_move`.
-    let _ = corvin_chess_core::Move::from_uci(uci).map_err(GameLogError::InvalidUci)?;
     let exists: bool = conn.exists(meta_key).await?;
     if !exists {
         return Err(GameLogError::GameGone);
@@ -227,11 +228,41 @@ pub async fn append_move_event(
         return Err(GameLogError::TooManyEvents);
     }
     let seq = prev + 1;
-    let event = GameEvent::move_uci(seq, uci, ts);
+    set_event_seq(&mut event, seq);
     let payload =
         serde_json::to_string(&event).map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+    if payload.len() > MAX_EVENT_BYTES {
+        return Err(GameLogError::CorruptEvent("event payload too large".into()));
+    }
     let new_len: u64 = conn.rpush(events_key, payload).await?;
     Ok(new_len)
+}
+
+fn set_event_seq(event: &mut GameEvent, seq: u64) {
+    match event {
+        GameEvent::Move { seq: s, .. }
+        | GameEvent::ServerNote { seq: s, .. }
+        | GameEvent::Offer { seq: s, .. }
+        | GameEvent::OfferResponse { seq: s, .. }
+        | GameEvent::Resign { seq: s, .. }
+        | GameEvent::Abort { seq: s, .. }
+        | GameEvent::Takeback { seq: s, .. } => *s = seq,
+    }
+}
+
+/// Append a Move event; returns the new monotonic `seq` (1-based list length).
+pub async fn append_move_event(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    uci: &str,
+    ts: u64,
+) -> Result<u64, GameLogError> {
+    if uci.is_empty() || uci.len() > MAX_UCI_LEN {
+        return Err(GameLogError::InvalidUci(UciError::Invalid));
+    }
+    // Shape-check UCI before storage; callers that need legality use `apply_move`.
+    let _ = corvin_chess_core::Move::from_uci(uci).map_err(GameLogError::InvalidUci)?;
+    append_game_event(conn, game_id, GameEvent::move_uci(0, uci, ts)).await
 }
 
 /// Load all events in order (empty vec when none). Requires meta to exist.
@@ -251,7 +282,7 @@ pub async fn load_events(
     let raw: Vec<String> = conn.lrange(events_key, 0, -1).await?;
     let mut out = Vec::with_capacity(raw.len());
     for (idx, line) in raw.iter().enumerate() {
-        if line.len() > 512 {
+        if line.len() > MAX_EVENT_BYTES {
             return Err(GameLogError::CorruptEvent(format!(
                 "index {idx}: event payload too large"
             )));
