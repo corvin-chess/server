@@ -1,4 +1,4 @@
-//! Corvin game server library surface (HTTP router + Postgres + Redis presence + auth).
+//! Corvin game server library surface (HTTP router + Postgres + Redis presence + auth + WS).
 
 #![forbid(unsafe_code)]
 
@@ -7,6 +7,7 @@ pub mod auth;
 pub mod db;
 pub mod redis_store;
 pub mod safety;
+pub mod ws;
 
 use std::sync::Arc;
 
@@ -100,10 +101,11 @@ impl AppState {
     }
 }
 
-/// Full HTTP router including `/health`, `/api/v1/auth/*`, and `/api/v1/account/*`.
+/// Full HTTP router including `/health`, `/ws`, `/api/v1/auth/*`, and `/api/v1/account/*`.
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/ws", get(ws::upgrade))
         .nest("/api/v1/auth", auth::router())
         .nest("/api/v1/account", account::router())
         .with_state(state)
@@ -114,9 +116,14 @@ pub fn health_router() -> Router {
     Router::new().route("/health", get(health))
 }
 
+/// WebSocket handshake router (`/ws` + `/health`) for PROTOCOL contract tests without Postgres.
+pub fn ws_router() -> Router {
+    ws::router()
+}
+
 /// Liveness probe: cheap, no dependency checks (Postgres readiness is separate).
 /// Body matches the infra Compose stub so probes can `grep ok`.
-async fn health() -> impl IntoResponse {
+pub(crate) async fn health() -> impl IntoResponse {
     (
         StatusCode::OK,
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
