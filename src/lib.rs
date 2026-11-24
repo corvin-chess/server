@@ -1,8 +1,9 @@
-//! Corvin game server library surface (HTTP router + Postgres migrations).
+//! Corvin game server library surface (HTTP router + Postgres + Redis presence).
 
 #![forbid(unsafe_code)]
 
 pub mod db;
+pub mod redis_store;
 
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
