@@ -134,6 +134,11 @@ async fn email_otp_register_then_login_sets_session_cookie() {
     assert_eq!(status, StatusCode::OK, "register verify body={body}");
     assert_eq!(body["username"], username);
     assert!(body["user_id"].as_str().is_some());
+    assert_eq!(
+        body["csrf_token"].as_str().map(|value| value.len()),
+        Some(64),
+        "register must return 32-byte hex csrf_token"
+    );
     let cookie = cookie.expect("register must Set-Cookie");
     assert!(
         cookie.contains("corvin_session="),
@@ -142,6 +147,10 @@ async fn email_otp_register_then_login_sets_session_cookie() {
     assert!(
         cookie.to_ascii_lowercase().contains("httponly"),
         "cookie must be HttpOnly: {cookie}"
+    );
+    assert!(
+        cookie.to_ascii_lowercase().contains("samesite=lax"),
+        "cookie must be SameSite=Lax: {cookie}"
     );
 
     let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE email_lower = $1")

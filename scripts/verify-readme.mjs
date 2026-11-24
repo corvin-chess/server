@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Matchmaking|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -157,6 +157,7 @@ if (!statusTableMatch) {
   let sawMigrationsBuilt = false
   let sawRedisPresenceBuilt = false
   let sawAuthBuilt = false
+  let sawSessionCsrfBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -185,6 +186,9 @@ if (!statusTableMatch) {
     if (/^Auth$/i.test(area) && /^Built$/i.test(state)) {
       sawAuthBuilt = true
     }
+    if (/^Session cookies \/ CSRF$/i.test(area) && /^Built$/i.test(state)) {
+      sawSessionCsrfBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -197,6 +201,9 @@ if (!statusTableMatch) {
   if (!sawMigrationsBuilt) fail('STATUS must include "| Postgres migrations | Built |"')
   if (!sawRedisPresenceBuilt) fail('STATUS must include "| Redis presence | Built |"')
   if (!sawAuthBuilt) fail('STATUS must include "| Auth | Built |"')
+  if (!sawSessionCsrfBuilt) {
+    fail('STATUS must include "| Session cookies / CSRF | Built |"')
+  }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
 }
@@ -276,6 +283,28 @@ if (
   fail("README must document /api/v1/auth, passkey/OTP, and CORVIN_RP_ORIGIN")
 } else {
   ok("Auth endpoints and RP env documented")
+}
+
+if (
+  !readme.includes("/api/v1/auth/session") ||
+  !readme.includes("/api/v1/auth/logout") ||
+  !readme.includes("X-CSRF-Token") ||
+  !readme.includes("csrf_token") ||
+  !readme.includes("corvin_session")
+) {
+  fail(
+    "README must document session/logout routes, csrf_token, X-CSRF-Token, and corvin_session"
+  )
+} else {
+  ok("Session cookie and CSRF surface documented")
+}
+
+const csrfRs = join(repoRoot, "src", "auth", "csrf.rs")
+const sessionCsrfTest = join(repoRoot, "tests", "session_csrf.rs")
+if (!existsSync(csrfRs) || !existsSync(sessionCsrfTest)) {
+  fail("CSRF sources missing (src/auth/csrf.rs, tests/session_csrf.rs)")
+} else {
+  ok("CSRF sources present")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {

@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::Response;
 use axum::Json;
 use rand::RngCore;
@@ -17,8 +16,7 @@ use webauthn_rs::prelude::{
     RegisterPublicKeyCredential,
 };
 
-use super::email_otp::AuthSuccess;
-use super::session::{create_session, set_session_cookie};
+use super::session::{auth_success_response, create_session};
 use super::AuthError;
 use crate::AppState;
 
@@ -253,8 +251,13 @@ pub async fn register_finish(
     .await?;
     tx.commit().await?;
 
-    let session_id = create_session(&state.db, &user_id).await?;
-    auth_success_response(&state, user_id, username, session_id)
+    let tokens = create_session(&state.db, &user_id).await?;
+    Ok(auth_success_response(
+        &state.rp_origin,
+        user_id,
+        username,
+        tokens,
+    ))
 }
 
 pub async fn login_start(
@@ -362,25 +365,13 @@ pub async fn login_finish(
         .await?;
     }
 
-    let session_id = create_session(&state.db, &user_id).await?;
-    auth_success_response(&state, user_id, username, session_id)
-}
-
-fn auth_success_response(
-    state: &AppState,
-    user_id: String,
-    username: String,
-    session_id: [u8; 32],
-) -> Result<Response, AuthError> {
-    let body = AuthSuccess { user_id, username };
-    let builder = Response::builder().status(StatusCode::OK);
-    let builder = set_session_cookie(builder, &session_id, &state.rp_origin);
-    Ok(builder
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(
-            serde_json::to_vec(&body).expect("AuthSuccess serializes"),
-        ))
-        .expect("response"))
+    let tokens = create_session(&state.db, &user_id).await?;
+    Ok(auth_success_response(
+        &state.rp_origin,
+        user_id,
+        username,
+        tokens,
+    ))
 }
 
 fn new_challenge_id() -> String {

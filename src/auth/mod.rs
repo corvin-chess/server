@@ -1,5 +1,6 @@
-//! Passkey + email OTP authentication (CV-133).
+//! Passkey + email OTP authentication (CV-133) with session cookies + CSRF (CV-134).
 
+pub mod csrf;
 pub mod email_otp;
 pub mod mailer;
 pub mod passkey;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::Router;
 
 use crate::AppState;
@@ -24,6 +25,8 @@ pub fn router() -> Router<AppState> {
         .route("/passkey/register/finish", post(passkey::register_finish))
         .route("/passkey/login/start", post(passkey::login_start))
         .route("/passkey/login/finish", post(passkey::login_finish))
+        .route("/session", get(session::get_session))
+        .route("/logout", post(session::logout))
 }
 
 /// Shared mailer handle.
@@ -33,6 +36,7 @@ pub type SharedMailer = Arc<dyn mailer::Mailer>;
 pub enum AuthError {
     BadRequest(&'static str),
     Unauthorized,
+    Forbidden(&'static str),
     Conflict(&'static str),
     Mail(String),
     Webauthn(String),
@@ -51,6 +55,8 @@ impl AuthError {
         let (status, message) = match self {
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, (*msg).to_owned()),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_owned()),
+            // CSRF failures use a fixed message so clients cannot probe token validity.
+            Self::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden".to_owned()),
             Self::Conflict(msg) => (StatusCode::CONFLICT, (*msg).to_owned()),
             Self::Mail(_) => (StatusCode::BAD_GATEWAY, "mail delivery failed".to_owned()),
             Self::Webauthn(_) => (StatusCode::UNAUTHORIZED, "webauthn failed".to_owned()),

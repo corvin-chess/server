@@ -1,7 +1,6 @@
 //! Email OTP register/login (CV-133).
 
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::Response;
 use axum::Json;
 use chrono::{Duration, Utc};
@@ -10,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
-use super::session::{create_session, set_session_cookie};
+use super::session::{auth_success_response, create_session};
 use super::AuthError;
 use crate::AppState;
 
@@ -36,12 +35,6 @@ pub struct OtpVerifyRequest {
     pub purpose: String,
     pub email: String,
     pub code: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AuthSuccess {
-    pub user_id: String,
-    pub username: String,
 }
 
 pub async fn otp_start(
@@ -207,19 +200,13 @@ pub async fn otp_verify(
         (user_id, username)
     };
 
-    let session_id = create_session(&state.db, &user_id).await?;
-    let body = AuthSuccess {
-        user_id: user_id.clone(),
+    let tokens = create_session(&state.db, &user_id).await?;
+    Ok(auth_success_response(
+        &state.rp_origin,
+        user_id,
         username,
-    };
-    let builder = Response::builder().status(StatusCode::OK);
-    let builder = set_session_cookie(builder, &session_id, &state.rp_origin);
-    Ok(builder
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(
-            serde_json::to_vec(&body).expect("AuthSuccess serializes"),
-        ))
-        .expect("response"))
+        tokens,
+    ))
 }
 
 async fn issue_otp(

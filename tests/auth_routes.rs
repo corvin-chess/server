@@ -41,6 +41,7 @@ fn auth_source_modules_exist() {
         "auth/email_otp.rs",
         "auth/passkey.rs",
         "auth/session.rs",
+        "auth/csrf.rs",
         "auth/mailer.rs",
         "auth/rate_limit.rs",
     ] {
