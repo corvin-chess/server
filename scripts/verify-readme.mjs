@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Play protocol \/ WS|Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist|Protocol contract fixtures)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -169,6 +169,7 @@ if (!statusTableMatch) {
   let sawMatchmakingBuilt = false
   let sawRatingsBuilt = false
   let sawFinishedPersistBuilt = false
+  let sawProtocolFixturesBuilt = false
   let sawImplPlanned = false
   for (const [, areaRaw, stateRaw] of stateCells) {
     const area = areaRaw.trim()
@@ -233,6 +234,9 @@ if (!statusTableMatch) {
     if (/^Finished game persist$/i.test(area) && /^Built$/i.test(state)) {
       sawFinishedPersistBuilt = true
     }
+    if (/^Protocol contract fixtures$/i.test(area) && /^Built$/i.test(state)) {
+      sawProtocolFixturesBuilt = true
+    }
     if (PLANNED_AREAS.test(area) && !/^Planned$/i.test(state)) {
       fail(`STATUS row "${area}" must stay Planned until code exists; got "${state}"`)
     }
@@ -280,6 +284,9 @@ if (!statusTableMatch) {
   }
   if (!sawFinishedPersistBuilt) {
     fail('STATUS must include "| Finished game persist | Built |"')
+  }
+  if (!sawProtocolFixturesBuilt) {
+    fail('STATUS must include "| Protocol contract fixtures | Built |"')
   }
   if (!sawImplPlanned) fail('STATUS must include "| Implementation | Planned |"')
   if (!process.exitCode) ok("STATUS rows use Planned/Built correctly")
@@ -658,6 +665,39 @@ if (
   )
 } else {
   ok("Finished game persist surface documented")
+}
+
+const protocolContractTest = join(repoRoot, "tests", "protocol_contract.rs")
+const protocolManifest = join(repoRoot, "tests", "fixtures", "protocol", "manifest.json")
+const protocolMoveApplied = join(
+  repoRoot,
+  "tests",
+  "fixtures",
+  "protocol",
+  "move_applied.json"
+)
+if (
+  !existsSync(protocolContractTest) ||
+  !existsSync(protocolManifest) ||
+  !existsSync(protocolMoveApplied)
+) {
+  fail(
+    "Protocol contract fixtures missing (tests/protocol_contract.rs, tests/fixtures/protocol/manifest.json, move_applied.json)"
+  )
+} else {
+  ok("Protocol contract fixture sources present")
+}
+
+if (
+  !readme.includes("protocol_contract") ||
+  !readme.includes("tests/fixtures/protocol") ||
+  !readme.includes("--test protocol_contract")
+) {
+  fail(
+    "README must document protocol_contract tests, fixtures path, and cargo test --test protocol_contract"
+  )
+} else {
+  ok("Protocol contract surface documented")
 }
 
 if (!existsSync(join(repoRoot, "src", "lib.rs")) || !existsSync(join(repoRoot, "src", "main.rs"))) {

@@ -1,0 +1,9 @@
+{
+  "typ": "ClockSync",
+  "v": 1,
+  "game_id": "01CV170GAME0000000000000001",
+  "clocks": { "w": 290000, "b": 295000 },
+  "active": "w",
+  "server_time": 1730000001000,
+  "lag": { "you_ms": 12, "opp_ms": 18, "server_ms": 5 }
+}

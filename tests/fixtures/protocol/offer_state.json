@@ -1,0 +1,10 @@
+{
+  "typ": "OfferState",
+  "v": 1,
+  "game_id": "01CV170GAME0000000000000001",
+  "offer": "draw",
+  "by": "w",
+  "status": "offered",
+  "seq": 3,
+  "ts": 1730000002000
+}

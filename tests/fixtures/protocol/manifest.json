@@ -1,0 +1,137 @@
+{
+  "protocol_version": 1,
+  "error_codes": [
+    "PROTO_VERSION",
+    "AUTH",
+    "RATE_LIMIT",
+    "NOT_YOUR_TURN",
+    "ILLEGAL_MOVE",
+    "GAME_GONE",
+    "OFFER_INVALID",
+    "ABORT_DENIED",
+    "CLAIM_DENIED",
+    "INTERNAL"
+  ],
+  "messages": [
+    {
+      "id": "hello",
+      "typ": "Hello",
+      "file": "hello.json",
+      "required": ["v", "typ", "client", "locale"]
+    },
+    {
+      "id": "welcome",
+      "typ": "Welcome",
+      "file": "welcome.json",
+      "required": ["v", "typ", "session_id", "server_time", "features"]
+    },
+    {
+      "id": "ping",
+      "typ": "Ping",
+      "file": "ping.json",
+      "required": ["v", "typ", "nonce"]
+    },
+    {
+      "id": "pong",
+      "typ": "Pong",
+      "file": "pong.json",
+      "required": ["v", "typ", "nonce"]
+    },
+    {
+      "id": "error_proto_version",
+      "typ": "Error",
+      "file": "error_proto_version.json",
+      "required": ["v", "typ", "code", "message"]
+    },
+    {
+      "id": "error_internal",
+      "typ": "Error",
+      "file": "error_internal.json",
+      "required": ["v", "typ", "code", "message"]
+    },
+    {
+      "id": "error_offer_invalid",
+      "typ": "Error",
+      "file": "error_offer_invalid.json",
+      "required": ["v", "typ", "code", "message"]
+    },
+    {
+      "id": "error_abort_denied",
+      "typ": "Error",
+      "file": "error_abort_denied.json",
+      "required": ["v", "typ", "code", "message"]
+    },
+    {
+      "id": "error_claim_denied",
+      "typ": "Error",
+      "file": "error_claim_denied.json",
+      "required": ["v", "typ", "code", "message"]
+    },
+    {
+      "id": "move_applied",
+      "typ": "MoveApplied",
+      "file": "move_applied.json",
+      "required": ["v", "typ", "game_id", "uci", "san", "fen", "clocks", "active", "seq", "ts"]
+    },
+    {
+      "id": "move_applied_lag",
+      "typ": "MoveApplied",
+      "file": "move_applied_lag.json",
+      "required": ["v", "typ", "game_id", "uci", "san", "fen", "clocks", "active", "seq", "ts", "lag_comp_ms"]
+    },
+    {
+      "id": "move_rejected_illegal",
+      "typ": "MoveRejected",
+      "file": "move_rejected_illegal.json",
+      "required": ["v", "typ", "id", "code", "message"]
+    },
+    {
+      "id": "clock_sync",
+      "typ": "ClockSync",
+      "file": "clock_sync.json",
+      "required": ["v", "typ", "game_id", "clocks", "active", "server_time", "lag"]
+    },
+    {
+      "id": "offer_state",
+      "typ": "OfferState",
+      "file": "offer_state.json",
+      "required": ["v", "typ", "game_id", "offer", "by", "status", "seq", "ts"]
+    },
+    {
+      "id": "game_end_flag",
+      "typ": "GameEnd",
+      "file": "game_end_flag.json",
+      "required": ["v", "typ", "game_id", "result", "reason", "flagged", "ts"]
+    },
+    {
+      "id": "game_end_resign",
+      "typ": "GameEnd",
+      "file": "game_end_resign.json",
+      "required": ["v", "typ", "game_id", "result", "reason", "seq", "ts"]
+    },
+    {
+      "id": "game_end_threefold",
+      "typ": "GameEnd",
+      "file": "game_end_threefold.json",
+      "required": ["v", "typ", "game_id", "result", "reason", "seq", "ts"]
+    },
+    {
+      "id": "game_end_rated",
+      "typ": "GameEnd",
+      "file": "game_end_rated.json",
+      "required": ["v", "typ", "game_id", "result", "reason", "seq", "ts", "rating_diff"]
+    },
+    {
+      "id": "game_start",
+      "typ": "GameStart",
+      "file": "game_start.json",
+      "required": ["v", "typ", "game_id", "color", "config", "opponents", "start_clocks"]
+    },
+    {
+      "id": "challenge",
+      "typ": "Challenge",
+      "file": "challenge.json",
+      "required": ["v", "typ", "challenge_id", "from", "config", "expires_ts"]
+    }
+  ]
+}

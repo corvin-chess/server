@@ -1,0 +1,11 @@
+{
+  "typ": "GameEnd",
+  "v": 1,
+  "game_id": "01CV170GAME0000000000000001",
+  "result": "0-1",
+  "winner": "b",
+  "reason": "resign",
+  "seq": 10,
+  "ts": 1730000004000,
+  "rating_diff": { "w": -8, "b": 8 }
+}

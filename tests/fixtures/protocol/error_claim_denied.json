@@ -1,0 +1,7 @@
+{
+  "typ": "Error",
+  "v": 1,
+  "id": "client-claim",
+  "code": "CLAIM_DENIED",
+  "message": "not claimable"
+}

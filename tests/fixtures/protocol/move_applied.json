@@ -1,0 +1,13 @@
+{
+  "typ": "MoveApplied",
+  "v": 1,
+  "id": "client-move-1",
+  "game_id": "01CV170GAME0000000000000001",
+  "uci": "e2e4",
+  "san": "e4",
+  "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+  "clocks": { "w": 300000, "b": 300000 },
+  "active": "b",
+  "seq": 1,
+  "ts": 1730000000100
+}

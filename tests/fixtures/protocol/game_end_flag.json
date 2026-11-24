@@ -1,0 +1,10 @@
+{
+  "typ": "GameEnd",
+  "v": 1,
+  "game_id": "01CV170GAME0000000000000001",
+  "result": "1-0",
+  "winner": "w",
+  "reason": "flag",
+  "flagged": "b",
+  "ts": 1730000003000
+}
