@@ -1,0 +1,7 @@
+{
+  "typ": "Error",
+  "v": 1,
+  "id": "client-offer",
+  "code": "OFFER_INVALID",
+  "message": "bad offer"
+}

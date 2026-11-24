@@ -51,5 +51,7 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked
+      - name: Protocol contract
+        run: cargo test --locked --test protocol_contract
       - name: Verify README
         run: node scripts/verify-readme.mjs

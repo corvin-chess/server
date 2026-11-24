@@ -1,0 +1,7 @@
+{
+  "typ": "MoveRejected",
+  "v": 1,
+  "id": "client-bad",
+  "code": "ILLEGAL_MOVE",
+  "message": "illegal move"
+}

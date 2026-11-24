@@ -1,0 +1,15 @@
+{
+  "typ": "Challenge",
+  "v": 1,
+  "challenge_id": "01CV170CHALLENGE00000000001",
+  "from": { "id": "01CV170WHITE000000000000001" },
+  "config": {
+    "time_class": "blitz",
+    "initial_ms": 300000,
+    "increment_ms": 2000,
+    "rated": true,
+    "color": "random",
+    "link": true
+  },
+  "expires_ts": 1730000100000
+}

@@ -1,0 +1,7 @@
+{
+  "typ": "Error",
+  "v": 1,
+  "id": "client-abort",
+  "code": "ABORT_DENIED",
+  "message": "abort denied"
+}

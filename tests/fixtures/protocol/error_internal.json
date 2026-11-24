@@ -1,0 +1,6 @@
+{
+  "typ": "Error",
+  "v": 1,
+  "code": "INTERNAL",
+  "message": "Hello required"
+}

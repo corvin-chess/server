@@ -1,0 +1,14 @@
+{
+  "typ": "MoveApplied",
+  "v": 1,
+  "id": "client-move-2",
+  "game_id": "01CV170GAME0000000000000001",
+  "uci": "e7e5",
+  "san": "e5",
+  "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2",
+  "clocks": { "w": 299850, "b": 300000 },
+  "active": "w",
+  "seq": 2,
+  "ts": 1730000000250,
+  "lag_comp_ms": 42
+}

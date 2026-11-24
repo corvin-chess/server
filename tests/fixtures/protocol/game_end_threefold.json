@@ -1,0 +1,10 @@
+{
+  "typ": "GameEnd",
+  "v": 1,
+  "game_id": "01CV170GAME0000000000000001",
+  "result": "1/2-1/2",
+  "winner": null,
+  "reason": "threefold",
+  "seq": 40,
+  "ts": 1730000005000
+}
