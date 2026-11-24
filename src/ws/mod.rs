@@ -201,7 +201,7 @@ fn handle_pong(value: &Value, pending_rtt_nonce: &mut Option<String>) {
         return;
     };
     if nonce == expected {
-        // RTT sample complete; later tasks (CV-164) will expose lag compensation.
+        // RTT sample complete; WS move dispatch will feed LagTracker / apply_move_with_rtt.
         *pending_rtt_nonce = None;
     }
 }

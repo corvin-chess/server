@@ -45,6 +45,7 @@ fn move_applied_json_matches_protocol_shape() {
         "b",
         1,
         1_730_000_000_100,
+        None,
     );
     assert_eq!(body["typ"], "MoveApplied");
     assert_eq!(body["v"], 1);
@@ -157,6 +158,7 @@ async fn redis_apply_legal_move_returns_applied_fields() {
         applied.active,
         applied.seq,
         11,
+        applied.lag_comp_ms,
     );
     assert_eq!(wire["typ"], "MoveApplied");
     assert_eq!(wire["san"], "e4");

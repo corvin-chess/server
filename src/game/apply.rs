@@ -1,5 +1,6 @@
 //! Legal move apply with PROTOCOL MoveApplied / MoveRejected mapping (CV-162).
 //! Clocks tick + Fischer increment + flag-before-increment (CV-163 / ADR-005).
+//! Lag compensation from server-measured RTT (CV-164); never trusts client send time.
 
 use std::fmt;
 
@@ -8,9 +9,10 @@ use redis::aio::ConnectionManager;
 use serde_json::{json, Value};
 
 use super::clock::{
-    flag_outcome_for_position, is_flagged_at, tick_meta_on_move, write_flag_to_meta,
-    write_tick_to_meta, ClockPair, ClockTick, FlagOutcome,
+    flag_outcome_for_position, is_flagged_at_compensated, tick_meta_on_move_compensated,
+    write_flag_to_meta, write_tick_to_meta, ClockPair, ClockTick, FlagOutcome,
 };
+use super::lag::{credit_lag, LagCredit};
 use super::replay::replay_fen;
 use super::store::{
     append_move_event, load_events, load_meta, save_meta, GameLogError, MAX_PLAYER_ID_LEN,
@@ -30,6 +32,8 @@ pub struct AppliedMove {
     /// Side to move after the ply (`"w"` / `"b"`).
     pub active: &'static str,
     pub seq: u64,
+    /// Lag credit applied this ply (ms); `None` when zero / no RTT sample.
+    pub lag_comp_ms: Option<u64>,
 }
 
 /// PROTOCOL `MoveRejected.code` values used by move apply.
@@ -144,6 +148,7 @@ pub fn move_applied_json(
     active: &str,
     seq: u64,
     ts: u64,
+    lag_comp_ms: Option<u64>,
 ) -> Value {
     let mut body = json!({
         "typ": "MoveApplied",
@@ -159,6 +164,9 @@ pub fn move_applied_json(
     });
     if let Some(id) = id {
         body["id"] = json!(id);
+    }
+    if let Some(comp) = lag_comp_ms.filter(|ms| *ms > 0) {
+        body["lag_comp_ms"] = json!(comp);
     }
     body
 }
@@ -185,6 +193,20 @@ pub async fn apply_move(
     player_id: &str,
     uci: &str,
     ts: u64,
+) -> Result<AppliedMove, ApplyError> {
+    apply_move_with_rtt(conn, game_id, player_id, uci, ts, None).await
+}
+
+/// Like `apply_move`, with injectable server-measured RTT for lag compensation (CV-164).
+///
+/// `rtt_ms` is a full round-trip; one-way estimate is `rtt_ms / 2`. Missing RTT → no credit.
+pub async fn apply_move_with_rtt(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    player_id: &str,
+    uci: &str,
+    ts: u64,
+    rtt_ms: Option<u64>,
 ) -> Result<AppliedMove, ApplyError> {
     if player_id.is_empty() || player_id.len() > MAX_PLAYER_ID_LEN {
         return Err(ApplyError::Auth);
@@ -218,6 +240,20 @@ pub async fn apply_move(
     }
 
     let board_active = color_active(seat);
+    let seat_quota = match seat {
+        Color::White => meta.lag_quota_w_ms,
+        Color::Black => meta.lag_quota_b_ms,
+    };
+    // Server-measured RTT only; one-way = RTT/2; never trust client send time (ADR-005).
+    let one_way = rtt_ms
+        .filter(|rtt| *rtt > 0 && *rtt <= 60_000)
+        .map(|rtt| rtt / 2)
+        .unwrap_or(0);
+    let LagCredit {
+        credit_ms: lag_comp,
+        remaining_quota_ms: new_quota,
+    } = credit_lag(one_way, seat_quota);
+
     let peek = ClockPair {
         w_ms: meta.clock_w_ms,
         b_ms: meta.clock_b_ms,
@@ -230,7 +266,7 @@ pub async fn apply_move(
         active_started_ms: meta.active_started_ms,
     };
     // Flag before legality: out-of-time ends the game even on an illegal UCI.
-    if let Some(color) = is_flagged_at(&peek, ts) {
+    if let Some(color) = is_flagged_at_compensated(&peek, ts, lag_comp) {
         let outcome = flag_outcome_for_position(&fen, color).map_err(ApplyError::Corrupt)?;
         let mut zeroed = peek;
         if color == "w" {
@@ -254,8 +290,8 @@ pub async fn apply_move(
         .ok_or_else(|| ApplyError::IllegalMove(uci.to_owned()))?;
     let next_fen = next.to_fen();
 
-    // Deduct elapsed then add Fischer increment (ADR-005); must not flag here after peek.
-    match tick_meta_on_move(&meta, seat, ts) {
+    // Deduct effective elapsed then add Fischer increment (ADR-005).
+    match tick_meta_on_move_compensated(&meta, seat, ts, lag_comp) {
         ClockTick::Flagged { color, clocks } => {
             // Same `ts` as peek should not flag; treat as internal fault.
             let outcome = flag_outcome_for_position(&fen, color).map_err(ApplyError::Corrupt)?;
@@ -266,6 +302,21 @@ pub async fn apply_move(
         }
         ClockTick::Applied(pair) => {
             write_tick_to_meta(&mut meta, &pair);
+        }
+    }
+
+    match seat {
+        Color::White => {
+            meta.lag_quota_w_ms = new_quota;
+            if one_way > 0 {
+                meta.lag_one_way_w_ms = one_way;
+            }
+        }
+        Color::Black => {
+            meta.lag_quota_b_ms = new_quota;
+            if one_way > 0 {
+                meta.lag_one_way_b_ms = one_way;
+            }
         }
     }
 
@@ -286,5 +337,6 @@ pub async fn apply_move(
         clock_b_ms: meta.clock_b_ms,
         active: color_active(next.side_to_move()),
         seq,
+        lag_comp_ms: if lag_comp > 0 { Some(lag_comp) } else { None },
     })
 }

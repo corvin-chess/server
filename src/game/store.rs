@@ -109,6 +109,8 @@ fn require_keys(game_id: &str) -> Result<(String, String), GameLogError> {
 }
 
 /// Create a live game with `meta.initial_fen`. Fails if the meta key already exists.
+///
+/// When both lag quotas are zero and clocks are set, seeds interim quotas (CV-164).
 pub async fn create_game(
     conn: &mut ConnectionManager,
     game_id: &str,
@@ -126,8 +128,15 @@ pub async fn create_game(
     // Reject bad FEN before touching Redis so callers get a clear error.
     let _ = corvin_chess_core::Position::from_fen(&meta.initial_fen)
         .map_err(GameLogError::InvalidFen)?;
-    let payload =
-        serde_json::to_string(meta).map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+    let mut stored = meta.clone();
+    if stored.lag_quota_w_ms == 0
+        && stored.lag_quota_b_ms == 0
+        && (stored.clock_w_ms > 0 || stored.clock_b_ms > 0)
+    {
+        super::lag::seed_lag_quotas(&mut stored);
+    }
+    let payload = serde_json::to_string(&stored)
+        .map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
     // SET NX: first writer wins; avoids clobbering an in-progress game.
     let set: Option<String> = redis::cmd("SET")
         .arg(&meta_key)

@@ -32,6 +32,18 @@ pub struct GameMeta {
     /// GameStart / matchmaking must set this when clocks begin; until then flag claims stay NotFlagged.
     #[serde(default)]
     pub active_started_ms: u64,
+    /// Remaining lag compensation quota for White (ms); seed via `seed_lag_quotas` / CV-164.
+    #[serde(default)]
+    pub lag_quota_w_ms: u64,
+    /// Remaining lag compensation quota for Black (ms).
+    #[serde(default)]
+    pub lag_quota_b_ms: u64,
+    /// Last server-measured one-way lag estimate for White (ms); used by flag claims.
+    #[serde(default)]
+    pub lag_one_way_w_ms: u64,
+    /// Last server-measured one-way lag estimate for Black (ms).
+    #[serde(default)]
+    pub lag_one_way_b_ms: u64,
     /// True after a terminal result (flag, resign, …) has been recorded.
     #[serde(default)]
     pub ended: bool,
@@ -52,6 +64,10 @@ impl Default for GameMeta {
             increment_ms: 0,
             active: String::new(),
             active_started_ms: 0,
+            lag_quota_w_ms: 0,
+            lag_quota_b_ms: 0,
+            lag_one_way_w_ms: 0,
+            lag_one_way_b_ms: 0,
             ended: false,
             ended_reason: None,
         }

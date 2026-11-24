@@ -2,7 +2,7 @@
 //!
 //! Times are milliseconds to match PROTOCOL.md (`clocks.w` / `clocks.b`).
 //! ADR-005's "centiseconds" wording is mapped 1:1 onto these ms fields.
-//! Lag compensation quota is CV-164; this module never trusts client RTT.
+//! Lag compensation (CV-164) adjusts effective elapsed before tick; never trusts client RTT.
 
 use std::fmt;
 
@@ -10,6 +10,7 @@ use corvin_chess_core::{Color, Position};
 use redis::aio::ConnectionManager;
 use serde_json::{json, Value};
 
+use super::lag::active_seat_credit_ms;
 use super::replay::replay_fen;
 use super::store::{load_events, load_meta, save_meta, GameLogError};
 
@@ -114,9 +115,15 @@ pub fn remaining_at(clocks: &ClockPair, now_ms: u64) -> (u64, u64) {
 
 /// Stop the active clock at `now_ms`: flag if depleted, else deduct + Fischer increment + switch.
 pub fn tick_on_move(clocks: &ClockPair, now_ms: u64) -> ClockTick {
+    tick_on_move_compensated(clocks, now_ms, 0)
+}
+
+/// Like `tick_on_move`, but subtracts `lag_comp_ms` from wall elapsed before flag/deduct (CV-164).
+pub fn tick_on_move_compensated(clocks: &ClockPair, now_ms: u64, lag_comp_ms: u64) -> ClockTick {
     // Corrupt active → treat as white so callers stay deterministic.
     let active = parse_active(&clocks.active).unwrap_or("w");
-    let elapsed = elapsed_ms(clocks.active_started_ms, now_ms);
+    let wall = elapsed_ms(clocks.active_started_ms, now_ms);
+    let elapsed = wall.saturating_sub(lag_comp_ms);
     let (mut w, mut b) = (clocks.w_ms, clocks.b_ms);
     let active_remaining = if active == "w" { w } else { b };
 
@@ -155,11 +162,20 @@ pub fn tick_on_move(clocks: &ClockPair, now_ms: u64) -> ClockTick {
 
 /// Whether the active side is already out of time at `now_ms`.
 pub fn is_flagged_at(clocks: &ClockPair, now_ms: u64) -> Option<&'static str> {
+    is_flagged_at_compensated(clocks, now_ms, 0)
+}
+
+/// Flag check after subtracting `lag_comp_ms` from wall elapsed (CV-164).
+pub fn is_flagged_at_compensated(
+    clocks: &ClockPair,
+    now_ms: u64,
+    lag_comp_ms: u64,
+) -> Option<&'static str> {
     let active = parse_active(&clocks.active)?;
     if clocks.active_started_ms == 0 {
         return None;
     }
-    let elapsed = elapsed_ms(clocks.active_started_ms, now_ms);
+    let elapsed = elapsed_ms(clocks.active_started_ms, now_ms).saturating_sub(lag_comp_ms);
     let stock = if active == "w" {
         clocks.w_ms
     } else {
@@ -291,7 +307,8 @@ pub async fn check_flag(
         Color::Black => "b",
     };
     let clocks = pair_from_meta(&meta, active);
-    Ok(is_flagged_at(&clocks, now_ms))
+    let lag_comp = active_seat_credit_ms(&meta, active);
+    Ok(is_flagged_at_compensated(&clocks, now_ms, lag_comp))
 }
 
 /// Verify a PROTOCOL `Flag` claim, persist ended meta, return `GameEnd` fields.
@@ -337,7 +354,9 @@ pub async fn claim_flag(
     }
 
     let clocks = pair_from_meta(&meta, board_active);
-    let Some(flagged) = is_flagged_at(&clocks, now_ms) else {
+    // Same lag credit policy as apply (ADR-005): last one-way capped by remaining quota.
+    let lag_comp = active_seat_credit_ms(&meta, board_active);
+    let Some(flagged) = is_flagged_at_compensated(&clocks, now_ms, lag_comp) else {
         return Err(FlagClaimError::NotFlagged);
     };
     if flagged != claimed {
@@ -356,19 +375,20 @@ pub async fn claim_flag(
     Ok(outcome)
 }
 
-/// Tick clocks for a successful move; returns updated pair or flagged color.
-/// Used by `apply_move`; persists via caller after append.
-pub fn tick_meta_on_move(
+/// Tick clocks for a successful move with optional lag credit (CV-163/164).
+/// Persists via caller after append.
+pub fn tick_meta_on_move_compensated(
     meta: &super::events::GameMeta,
     board_active: Color,
     now_ms: u64,
+    lag_comp_ms: u64,
 ) -> ClockTick {
     let active = match board_active {
         Color::White => "w",
         Color::Black => "b",
     };
     let clocks = pair_from_meta(meta, active);
-    tick_on_move(&clocks, now_ms)
+    tick_on_move_compensated(&clocks, now_ms, lag_comp_ms)
 }
 
 /// Write clock fields from a successful tick into meta (caller saves).
