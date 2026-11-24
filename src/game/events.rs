@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Standard chess starting position FEN (six fields).
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-/// Durable-enough live meta for a Redis game (initial FEN + seats + stub clocks).
+/// Durable-enough live meta for a Redis game (initial FEN + seats + clocks).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameMeta {
     pub initial_fen: String,
@@ -16,12 +16,28 @@ pub struct GameMeta {
     /// Opaque seat token for Black (session/user id). Empty until seated.
     #[serde(default)]
     pub black_id: String,
-    /// Remaining White clock ms (stub until CV-163 ticks).
+    /// Remaining White clock ms (PROTOCOL `clocks.w`).
     #[serde(default)]
     pub clock_w_ms: u64,
-    /// Remaining Black clock ms (stub until CV-163 ticks).
+    /// Remaining Black clock ms (PROTOCOL `clocks.b`).
     #[serde(default)]
     pub clock_b_ms: u64,
+    /// Fischer increment added after each accepted move (ms).
+    #[serde(default)]
+    pub increment_ms: u64,
+    /// Side whose clock is running (`"w"` / `"b"`); empty → derive from FEN.
+    #[serde(default)]
+    pub active: String,
+    /// Server unix-ms when `active` began thinking; `0` = not started (no elapsed).
+    /// GameStart / matchmaking must set this when clocks begin; until then flag claims stay NotFlagged.
+    #[serde(default)]
+    pub active_started_ms: u64,
+    /// True after a terminal result (flag, resign, …) has been recorded.
+    #[serde(default)]
+    pub ended: bool,
+    /// Short reason when `ended` (e.g. `flag`); omitted while live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_reason: Option<String>,
 }
 
 impl Default for GameMeta {
@@ -33,6 +49,11 @@ impl Default for GameMeta {
             black_id: String::new(),
             clock_w_ms: 0,
             clock_b_ms: 0,
+            increment_ms: 0,
+            active: String::new(),
+            active_started_ms: 0,
+            ended: false,
+            ended_reason: None,
         }
     }
 }

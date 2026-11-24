@@ -28,6 +28,7 @@ fn seated_meta() -> GameMeta {
         black_id: BLACK.to_owned(),
         clock_w_ms: 300_000,
         clock_b_ms: 300_000,
+        ..GameMeta::default()
     }
 }
 

@@ -149,7 +149,8 @@ pub async fn load_meta(
     let (meta_key, _) = require_keys(game_id)?;
     let raw: Option<String> = conn.get(meta_key).await?;
     let raw = raw.ok_or(GameLogError::GameGone)?;
-    if raw.len() > 512 {
+    // Clock fields grew the payload; keep a hard DoS bound.
+    if raw.len() > 1024 {
         return Err(GameLogError::CorruptEvent("meta payload too large".into()));
     }
     let meta: GameMeta =
@@ -160,6 +161,36 @@ pub async fn load_meta(
         ));
     }
     Ok(meta)
+}
+
+/// Overwrite game meta (clocks / ended). Fails if the game key is missing.
+pub async fn save_meta(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    meta: &GameMeta,
+) -> Result<(), GameLogError> {
+    let (meta_key, _) = require_keys(game_id)?;
+    if meta.initial_fen.len() > MAX_FEN_LEN || meta.initial_fen.is_empty() {
+        return Err(GameLogError::CorruptEvent(
+            "meta initial_fen out of bounds".into(),
+        ));
+    }
+    if meta.white_id.len() > MAX_PLAYER_ID_LEN || meta.black_id.len() > MAX_PLAYER_ID_LEN {
+        return Err(GameLogError::CorruptEvent(
+            "seat id exceeds max length".into(),
+        ));
+    }
+    let exists: bool = conn.exists(&meta_key).await?;
+    if !exists {
+        return Err(GameLogError::GameGone);
+    }
+    let payload =
+        serde_json::to_string(meta).map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+    if payload.len() > 1024 {
+        return Err(GameLogError::CorruptEvent("meta payload too large".into()));
+    }
+    let _: () = conn.set(meta_key, payload).await?;
+    Ok(())
 }
 
 /// Append a Move event; returns the new monotonic `seq` (1-based list length).
