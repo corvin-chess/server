@@ -5,8 +5,10 @@
 //! Clocks + Fischer increment + flag: CV-163 / ADR-005.
 //! Lag compensation quota from server RTT: CV-164.
 //! Draw / takeback / resign / abort: CV-165.
+//! Threefold / fifty claims + fivefold / seventy-five auto: CV-166.
 
 mod apply;
+mod claims;
 mod clock;
 mod events;
 mod lag;
@@ -17,6 +19,10 @@ mod store;
 pub use apply::{
     apply_move, apply_move_with_rtt, move_applied_json, move_rejected_json, AppliedMove,
     ApplyError, MoveRejectCode,
+};
+pub use claims::{
+    auto_draw_reason, claim_denied_json, claim_draw, claimable_reason, game_end_claim_json,
+    position_with_prior_keys, record_auto_draw, ClaimError, ClaimRejectCode,
 };
 pub use clock::{
     check_flag, claim_flag, clock_sync_json, flag_outcome_for_position, game_end_flag_json,

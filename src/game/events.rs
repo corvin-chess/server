@@ -171,6 +171,21 @@ pub enum GameEvent {
         undone_seq: u64,
         ts: u64,
     },
+    /// Player claimed threefold or fifty-move (CV-166).
+    ClaimDraw {
+        seq: u64,
+        by: String,
+        /// `"threefold"` or `"fifty"`.
+        kind: String,
+        ts: u64,
+    },
+    /// Automatic fivefold or seventy-five draw after a ply (CV-166).
+    AutoDraw {
+        seq: u64,
+        /// `"fivefold"` or `"seventy_five"`.
+        kind: String,
+        ts: u64,
+    },
 }
 
 impl GameEvent {
@@ -182,7 +197,9 @@ impl GameEvent {
             | Self::OfferResponse { seq, .. }
             | Self::Resign { seq, .. }
             | Self::Abort { seq, .. }
-            | Self::Takeback { seq, .. } => *seq,
+            | Self::Takeback { seq, .. }
+            | Self::ClaimDraw { seq, .. }
+            | Self::AutoDraw { seq, .. } => *seq,
         }
     }
 

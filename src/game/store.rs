@@ -246,7 +246,9 @@ fn set_event_seq(event: &mut GameEvent, seq: u64) {
         | GameEvent::OfferResponse { seq: s, .. }
         | GameEvent::Resign { seq: s, .. }
         | GameEvent::Abort { seq: s, .. }
-        | GameEvent::Takeback { seq: s, .. } => *s = seq,
+        | GameEvent::Takeback { seq: s, .. }
+        | GameEvent::ClaimDraw { seq: s, .. }
+        | GameEvent::AutoDraw { seq: s, .. } => *s = seq,
     }
 }
 
