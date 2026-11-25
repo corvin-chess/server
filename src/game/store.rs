@@ -208,11 +208,186 @@ pub async fn save_meta(
     Ok(())
 }
 
+/// Outcome of the apply CAS Lua script (CV-171).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CasCommitResult {
+    Ok { move_seq: u64, last_seq: u64 },
+    Conflict { actual_len: u64 },
+    Gone,
+    TooManyEvents,
+    Corrupt(String),
+}
+
+/// Parse the integer vector returned by `commit_apply_cas` Lua.
+pub fn parse_cas_commit_reply(reply: &[i64]) -> CasCommitResult {
+    match reply {
+        // move_seq may be 0 for meta-only CAS when the event list is still empty.
+        [1, move_seq, last_seq] if *move_seq >= 0 && *last_seq >= *move_seq => {
+            CasCommitResult::Ok {
+                move_seq: *move_seq as u64,
+                last_seq: *last_seq as u64,
+            }
+        }
+        [0, actual] if *actual >= 0 => CasCommitResult::Conflict {
+            actual_len: *actual as u64,
+        },
+        [-1] => CasCommitResult::Gone,
+        [-2] => CasCommitResult::TooManyEvents,
+        _ => CasCommitResult::Corrupt("unexpected CAS reply".into()),
+    }
+}
+
+/// Lua: CAS on event list length, then SET meta + RPUSH move (+ optional auto-draw).
+///
+/// KEYS[1]=meta KEYS[2]=events
+/// ARGV[1]=expected_len ARGV[2]=max_events ARGV[3]=meta_json ARGV[4]=move_json
+/// ARGV[5]=auto_json or empty
+const COMMIT_APPLY_CAS_LUA: &str = r#"
+local expected = tonumber(ARGV[1])
+local max_events = tonumber(ARGV[2])
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return {-1}
+end
+local len = redis.call('LLEN', KEYS[2])
+if len ~= expected then
+  return {0, len}
+end
+local add = 1
+if ARGV[5] ~= '' then
+  add = 2
+end
+if len + add > max_events then
+  return {-2}
+end
+redis.call('SET', KEYS[1], ARGV[3])
+redis.call('RPUSH', KEYS[2], ARGV[4])
+local move_seq = len + 1
+local last_seq = move_seq
+if ARGV[5] ~= '' then
+  redis.call('RPUSH', KEYS[2], ARGV[5])
+  last_seq = move_seq + 1
+end
+return {1, move_seq, last_seq}
+"#;
+
+/// Atomically commit an applied ply: meta + Move event (+ optional AutoDraw).
+///
+/// Fails with `CasCommitResult::Conflict` when another writer already appended
+/// since `expected_len` was observed (callers retry after re-validation).
+pub async fn commit_apply_cas(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    expected_len: u64,
+    meta: &GameMeta,
+    move_event: &GameEvent,
+    auto_event: Option<&GameEvent>,
+) -> Result<CasCommitResult, GameLogError> {
+    let (meta_key, events_key) = require_keys(game_id)?;
+    if meta.initial_fen.len() > MAX_FEN_LEN || meta.initial_fen.is_empty() {
+        return Err(GameLogError::CorruptEvent(
+            "meta initial_fen out of bounds".into(),
+        ));
+    }
+    if meta.white_id.len() > MAX_PLAYER_ID_LEN || meta.black_id.len() > MAX_PLAYER_ID_LEN {
+        return Err(GameLogError::CorruptEvent(
+            "seat id exceeds max length".into(),
+        ));
+    }
+    let meta_payload =
+        serde_json::to_string(meta).map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+    if meta_payload.len() > MAX_META_BYTES {
+        return Err(GameLogError::CorruptEvent("meta payload too large".into()));
+    }
+    let move_payload = serde_json::to_string(move_event)
+        .map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+    if move_payload.len() > MAX_EVENT_BYTES {
+        return Err(GameLogError::CorruptEvent("event payload too large".into()));
+    }
+    let auto_payload = match auto_event {
+        Some(ev) => {
+            let raw = serde_json::to_string(ev)
+                .map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+            if raw.len() > MAX_EVENT_BYTES {
+                return Err(GameLogError::CorruptEvent("event payload too large".into()));
+            }
+            raw
+        }
+        None => String::new(),
+    };
+
+    let reply: Vec<i64> = redis::Script::new(COMMIT_APPLY_CAS_LUA)
+        .key(meta_key)
+        .key(events_key)
+        .arg(expected_len)
+        .arg(MAX_EVENTS as u64)
+        .arg(meta_payload)
+        .arg(move_payload)
+        .arg(auto_payload)
+        .invoke_async(conn)
+        .await?;
+
+    Ok(parse_cas_commit_reply(&reply))
+}
+
+/// Lua: CAS on event list length, then SET meta only (flag / terminal without a ply).
+///
+/// KEYS[1]=meta KEYS[2]=events
+/// ARGV[1]=expected_len ARGV[2]=meta_json
+const COMMIT_META_CAS_LUA: &str = r#"
+local expected = tonumber(ARGV[1])
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return {-1}
+end
+local len = redis.call('LLEN', KEYS[2])
+if len ~= expected then
+  return {0, len}
+end
+redis.call('SET', KEYS[1], ARGV[2])
+return {1, len, len}
+"#;
+
+/// Atomically write meta only when the event list length still matches `expected_len`.
+///
+/// Used for flag termination so a concurrent move CAS cannot be overwritten by a
+/// stale `save_meta` after the ply already committed.
+pub async fn commit_meta_cas(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    expected_len: u64,
+    meta: &GameMeta,
+) -> Result<CasCommitResult, GameLogError> {
+    let (meta_key, events_key) = require_keys(game_id)?;
+    if meta.initial_fen.len() > MAX_FEN_LEN || meta.initial_fen.is_empty() {
+        return Err(GameLogError::CorruptEvent(
+            "meta initial_fen out of bounds".into(),
+        ));
+    }
+    if meta.white_id.len() > MAX_PLAYER_ID_LEN || meta.black_id.len() > MAX_PLAYER_ID_LEN {
+        return Err(GameLogError::CorruptEvent(
+            "seat id exceeds max length".into(),
+        ));
+    }
+    let meta_payload =
+        serde_json::to_string(meta).map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+    if meta_payload.len() > MAX_META_BYTES {
+        return Err(GameLogError::CorruptEvent("meta payload too large".into()));
+    }
+
+    let reply: Vec<i64> = redis::Script::new(COMMIT_META_CAS_LUA)
+        .key(meta_key)
+        .key(events_key)
+        .arg(expected_len)
+        .arg(meta_payload)
+        .invoke_async(conn)
+        .await?;
+
+    Ok(parse_cas_commit_reply(&reply))
+}
+
 /// Append any game event; assigns monotonic `seq` (1-based list length) and returns it.
 ///
 /// Pass `seq: 0` on the event; the stored value is overwritten with the list length.
-/// Assumes single-writer ownership per game (live match node). Concurrent
-/// appenders can race LLEN/RPUSH; CV-171 can tighten with a Lua script.
+/// Non-apply paths still use LLEN then RPUSH; move apply uses `commit_apply_cas` (CV-171).
 pub async fn append_game_event(
     conn: &mut ConnectionManager,
     game_id: &str,

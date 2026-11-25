@@ -7,6 +7,7 @@
 //! Draw / takeback / resign / abort: CV-165.
 //! Threefold / fifty claims + fivefold / seventy-five auto: CV-166.
 //! Finished-game Postgres persist + PGN export: CV-169.
+//! Atomic apply_move Lua/CAS: CV-171.
 
 mod apply;
 mod claims;
@@ -50,7 +51,8 @@ pub use persist::{
 pub use pgn::{movetext_from_events, render_pgn, PgnExportError};
 pub use replay::{net_move_events, replay_fen};
 pub use store::{
-    append_game_event, append_move_event, create_game, delete_game, game_events_key, game_meta_key,
-    load_events, load_meta, reconstruct_fen, save_meta, GameLogError, GAME_KEY_PREFIX, MAX_EVENTS,
+    append_game_event, append_move_event, commit_apply_cas, commit_meta_cas, create_game,
+    delete_game, game_events_key, game_meta_key, load_events, load_meta, parse_cas_commit_reply,
+    reconstruct_fen, save_meta, CasCommitResult, GameLogError, GAME_KEY_PREFIX, MAX_EVENTS,
     MAX_EVENT_BYTES, MAX_FEN_LEN, MAX_GAME_ID_LEN, MAX_META_BYTES, MAX_PLAYER_ID_LEN, MAX_UCI_LEN,
 };
