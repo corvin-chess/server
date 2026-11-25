@@ -270,17 +270,18 @@ end
 return {1, move_seq, last_seq}
 "#;
 
-/// Atomically commit an applied ply: meta + Move event (+ optional AutoDraw).
+/// Atomically commit meta + one or two events when `LLEN` still equals `expected_len`.
 ///
+/// Shared by move apply (CV-171) and offer/claim/resign appenders (CV-173).
 /// Fails with `CasCommitResult::Conflict` when another writer already appended
 /// since `expected_len` was observed (callers retry after re-validation).
-pub async fn commit_apply_cas(
+pub async fn commit_append_cas(
     conn: &mut ConnectionManager,
     game_id: &str,
     expected_len: u64,
     meta: &GameMeta,
-    move_event: &GameEvent,
-    auto_event: Option<&GameEvent>,
+    first: &GameEvent,
+    second: Option<&GameEvent>,
 ) -> Result<CasCommitResult, GameLogError> {
     let (meta_key, events_key) = require_keys(game_id)?;
     if meta.initial_fen.len() > MAX_FEN_LEN || meta.initial_fen.is_empty() {
@@ -298,12 +299,12 @@ pub async fn commit_apply_cas(
     if meta_payload.len() > MAX_META_BYTES {
         return Err(GameLogError::CorruptEvent("meta payload too large".into()));
     }
-    let move_payload = serde_json::to_string(move_event)
-        .map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
-    if move_payload.len() > MAX_EVENT_BYTES {
+    let first_payload =
+        serde_json::to_string(first).map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+    if first_payload.len() > MAX_EVENT_BYTES {
         return Err(GameLogError::CorruptEvent("event payload too large".into()));
     }
-    let auto_payload = match auto_event {
+    let second_payload = match second {
         Some(ev) => {
             let raw = serde_json::to_string(ev)
                 .map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
@@ -321,12 +322,26 @@ pub async fn commit_apply_cas(
         .arg(expected_len)
         .arg(MAX_EVENTS as u64)
         .arg(meta_payload)
-        .arg(move_payload)
-        .arg(auto_payload)
+        .arg(first_payload)
+        .arg(second_payload)
         .invoke_async(conn)
         .await?;
 
     Ok(parse_cas_commit_reply(&reply))
+}
+
+/// Atomically commit an applied ply: meta + Move event (+ optional AutoDraw).
+///
+/// Thin wrapper over [`commit_append_cas`] kept for apply call sites (CV-171).
+pub async fn commit_apply_cas(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    expected_len: u64,
+    meta: &GameMeta,
+    move_event: &GameEvent,
+    auto_event: Option<&GameEvent>,
+) -> Result<CasCommitResult, GameLogError> {
+    commit_append_cas(conn, game_id, expected_len, meta, move_event, auto_event).await
 }
 
 /// Lua: CAS on event list length, then SET meta only (flag / terminal without a ply).
@@ -384,33 +399,85 @@ pub async fn commit_meta_cas(
     Ok(parse_cas_commit_reply(&reply))
 }
 
+/// Bounded CAS retries when another writer wins the event-length race (CV-173).
+const MAX_APPEND_CAS_RETRIES: u32 = 8;
+
+/// Lua: CAS on event list length, then RPUSH only (never SET meta).
+///
+/// KEYS[1]=meta KEYS[2]=events
+/// ARGV[1]=expected_len ARGV[2]=max_events ARGV[3]=event_json
+///
+/// Bare appenders must not rewrite meta: a concurrent offer/move may have already
+/// committed a newer meta at the same prior length observation window.
+const COMMIT_EVENT_ONLY_CAS_LUA: &str = r#"
+local expected = tonumber(ARGV[1])
+local max_events = tonumber(ARGV[2])
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return {-1}
+end
+local len = redis.call('LLEN', KEYS[2])
+if len ~= expected then
+  return {0, len}
+end
+if len + 1 > max_events then
+  return {-2}
+end
+redis.call('RPUSH', KEYS[2], ARGV[3])
+local seq = len + 1
+return {1, seq, seq}
+"#;
+
 /// Append any game event; assigns monotonic `seq` (1-based list length) and returns it.
 ///
 /// Pass `seq: 0` on the event; the stored value is overwritten with the list length.
-/// Non-apply paths still use LLEN then RPUSH; move apply uses `commit_apply_cas` (CV-171).
+/// Uses Lua CAS on `LLEN` + RPUSH only so concurrent appenders cannot share a seq
+/// and cannot stomp a newer meta written by offer/move CAS (CV-173).
 pub async fn append_game_event(
     conn: &mut ConnectionManager,
     game_id: &str,
-    mut event: GameEvent,
+    event: GameEvent,
 ) -> Result<u64, GameLogError> {
     let (meta_key, events_key) = require_keys(game_id)?;
-    let exists: bool = conn.exists(meta_key).await?;
-    if !exists {
-        return Err(GameLogError::GameGone);
+    for attempt in 0..MAX_APPEND_CAS_RETRIES {
+        let exists: bool = conn.exists(&meta_key).await?;
+        if !exists {
+            return Err(GameLogError::GameGone);
+        }
+        let expected: u64 = conn.llen(&events_key).await?;
+        if expected as usize >= MAX_EVENTS {
+            return Err(GameLogError::TooManyEvents);
+        }
+        let mut ev = event.clone();
+        set_event_seq(&mut ev, expected + 1);
+        let payload = serde_json::to_string(&ev)
+            .map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
+        if payload.len() > MAX_EVENT_BYTES {
+            return Err(GameLogError::CorruptEvent("event payload too large".into()));
+        }
+        let reply: Vec<i64> = redis::Script::new(COMMIT_EVENT_ONLY_CAS_LUA)
+            .key(&meta_key)
+            .key(&events_key)
+            .arg(expected)
+            .arg(MAX_EVENTS as u64)
+            .arg(payload)
+            .invoke_async(conn)
+            .await?;
+        match parse_cas_commit_reply(&reply) {
+            CasCommitResult::Ok { last_seq, .. } => return Ok(last_seq),
+            CasCommitResult::Conflict { .. } if attempt + 1 < MAX_APPEND_CAS_RETRIES => continue,
+            CasCommitResult::Conflict { .. } => {
+                return Err(GameLogError::CorruptEvent(
+                    "append CAS exhausted after concurrent writers".into(),
+                ));
+            }
+            CasCommitResult::Gone => return Err(GameLogError::GameGone),
+            CasCommitResult::TooManyEvents => return Err(GameLogError::TooManyEvents),
+            CasCommitResult::Corrupt(detail) => return Err(GameLogError::CorruptEvent(detail)),
+        }
     }
-    let prev: u64 = conn.llen(&events_key).await?;
-    if prev as usize >= MAX_EVENTS {
-        return Err(GameLogError::TooManyEvents);
-    }
-    let seq = prev + 1;
-    set_event_seq(&mut event, seq);
-    let payload =
-        serde_json::to_string(&event).map_err(|err| GameLogError::CorruptEvent(err.to_string()))?;
-    if payload.len() > MAX_EVENT_BYTES {
-        return Err(GameLogError::CorruptEvent("event payload too large".into()));
-    }
-    let new_len: u64 = conn.rpush(events_key, payload).await?;
-    Ok(new_len)
+    Err(GameLogError::CorruptEvent(
+        "append CAS exhausted after concurrent writers".into(),
+    ))
 }
 
 fn set_event_seq(event: &mut GameEvent, seq: u64) {

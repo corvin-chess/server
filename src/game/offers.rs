@@ -1,4 +1,5 @@
 //! Draw / takeback offers, resign, and abort (CV-165 / PROTOCOL / ADR-004 / ADR-005).
+//! Redis Lua CAS commit for offer/resign/abort appends (CV-173).
 
 use std::fmt;
 
@@ -8,10 +9,12 @@ use serde_json::{json, Value};
 use super::events::{GameEvent, GameMeta, PendingOffer};
 use super::replay::{net_move_events, replay_fen};
 use super::store::{
-    append_game_event, load_events, load_meta, save_meta, GameLogError, MAX_PLAYER_ID_LEN,
+    commit_append_cas, load_events, load_meta, CasCommitResult, GameLogError, MAX_PLAYER_ID_LEN,
 };
 
 const PROTOCOL_V: u32 = 1;
+/// Bounded CAS retries when another writer wins the event-length race.
+const MAX_CAS_RETRIES: u32 = 8;
 
 /// Offer kinds accepted by PROTOCOL `OfferResponse.offer`.
 pub const OFFER_DRAW: &str = "draw";
@@ -73,6 +76,8 @@ pub enum OfferError {
     AbortDenied(String),
     Auth,
     GameGone,
+    /// CAS lost the event-length race; public helpers retry before surfacing GameGone.
+    Conflict,
     Corrupt(String),
     TooManyEvents,
     Redis(redis::RedisError),
@@ -84,7 +89,7 @@ impl OfferError {
             Self::OfferInvalid(_) => OfferRejectCode::OfferInvalid,
             Self::AbortDenied(_) => OfferRejectCode::AbortDenied,
             Self::Auth => OfferRejectCode::Auth,
-            Self::GameGone => OfferRejectCode::GameGone,
+            Self::GameGone | Self::Conflict => OfferRejectCode::GameGone,
             Self::Corrupt(_) | Self::TooManyEvents | Self::Redis(_) => {
                 OfferRejectCode::OfferInvalid
             }
@@ -99,6 +104,7 @@ impl fmt::Display for OfferError {
             Self::AbortDenied(msg) => write!(f, "{msg}"),
             Self::Auth => write!(f, "not a player in this game"),
             Self::GameGone => write!(f, "game not found"),
+            Self::Conflict => write!(f, "offer conflict (CAS)"),
             Self::Corrupt(detail) => write!(f, "corrupt game state: {detail}"),
             Self::TooManyEvents => write!(f, "game event log exceeds max length"),
             Self::Redis(err) => write!(f, "{err}"),
@@ -248,6 +254,16 @@ fn parse_kind(kind: &str) -> Result<&'static str, OfferError> {
     }
 }
 
+fn map_cas(cas: CasCommitResult) -> Result<u64, OfferError> {
+    match cas {
+        CasCommitResult::Ok { last_seq, .. } => Ok(last_seq),
+        CasCommitResult::Conflict { .. } => Err(OfferError::Conflict),
+        CasCommitResult::Gone => Err(OfferError::GameGone),
+        CasCommitResult::TooManyEvents => Err(OfferError::TooManyEvents),
+        CasCommitResult::Corrupt(detail) => Err(OfferError::Corrupt(detail)),
+    }
+}
+
 /// Offer a draw. Counter-offering an opponent draw accepts it.
 pub async fn offer_draw(
     conn: &mut ConnectionManager,
@@ -255,7 +271,15 @@ pub async fn offer_draw(
     player_id: &str,
     ts: u64,
 ) -> Result<OfferOutcome, OfferError> {
-    offer_kind(conn, game_id, player_id, OFFER_DRAW, ts).await
+    for attempt in 0..MAX_CAS_RETRIES {
+        match offer_kind_once(conn, game_id, player_id, OFFER_DRAW, ts).await {
+            Ok(out) => return Ok(out),
+            Err(OfferError::Conflict) if attempt + 1 < MAX_CAS_RETRIES => continue,
+            Err(OfferError::Conflict) => return Err(OfferError::GameGone),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(OfferError::GameGone)
 }
 
 /// Offer a takeback of the last net ply. Counter-offer accepts.
@@ -265,10 +289,18 @@ pub async fn offer_takeback(
     player_id: &str,
     ts: u64,
 ) -> Result<OfferOutcome, OfferError> {
-    offer_kind(conn, game_id, player_id, OFFER_TAKEBACK, ts).await
+    for attempt in 0..MAX_CAS_RETRIES {
+        match offer_kind_once(conn, game_id, player_id, OFFER_TAKEBACK, ts).await {
+            Ok(out) => return Ok(out),
+            Err(OfferError::Conflict) if attempt + 1 < MAX_CAS_RETRIES => continue,
+            Err(OfferError::Conflict) => return Err(OfferError::GameGone),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(OfferError::GameGone)
 }
 
-async fn offer_kind(
+async fn offer_kind_once(
     conn: &mut ConnectionManager,
     game_id: &str,
     player_id: &str,
@@ -302,29 +334,26 @@ async fn offer_kind(
         }
     }
 
-    // Append audit event before meta so a failed RPUSH cannot leave pending without a log entry.
-    let seq = append_game_event(
-        conn,
-        game_id,
-        GameEvent::Offer {
-            seq: 0,
-            kind: kind.to_owned(),
-            by: by.to_owned(),
-            ts,
-        },
-    )
-    .await?;
+    let expected_len = events.len() as u64;
+    let seq = expected_len + 1;
     meta.pending_offer = Some(PendingOffer {
         kind: kind.to_owned(),
         by: by.to_owned(),
     });
-    save_meta(conn, game_id, &meta).await?;
+    let event = GameEvent::Offer {
+        seq,
+        kind: kind.to_owned(),
+        by: by.to_owned(),
+        ts,
+    };
+    let last_seq =
+        map_cas(commit_append_cas(conn, game_id, expected_len, &meta, &event, None).await?)?;
 
     Ok(OfferOutcome::State(OfferStateOut {
         offer: kind,
         by,
         status: "offered",
-        seq,
+        seq: last_seq,
     }))
 }
 
@@ -338,11 +367,19 @@ pub async fn respond_offer(
     ts: u64,
 ) -> Result<OfferOutcome, OfferError> {
     let kind = parse_kind(offer)?;
-    let mut meta = load_meta(conn, game_id).await?;
-    require_live(&meta)?;
-    let by = seat_color(&meta, player_id)?;
-    let events = load_events(conn, game_id).await?;
-    respond_offer_inner(conn, game_id, &mut meta, &events, by, kind, accept, ts).await
+    for attempt in 0..MAX_CAS_RETRIES {
+        let mut meta = load_meta(conn, game_id).await?;
+        require_live(&meta)?;
+        let by = seat_color(&meta, player_id)?;
+        let events = load_events(conn, game_id).await?;
+        match respond_offer_inner(conn, game_id, &mut meta, &events, by, kind, accept, ts).await {
+            Ok(out) => return Ok(out),
+            Err(OfferError::Conflict) if attempt + 1 < MAX_CAS_RETRIES => continue,
+            Err(OfferError::Conflict) => return Err(OfferError::GameGone),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(OfferError::GameGone)
 }
 
 #[allow(clippy::too_many_arguments)] // PROTOCOL fields + Redis handles; keep flat for call sites.
@@ -373,33 +410,32 @@ async fn respond_offer_inner(
         }
         match kind {
             OFFER_DRAW => {
-                let seq = append_game_event(
-                    conn,
-                    game_id,
-                    GameEvent::OfferResponse {
-                        seq: 0,
-                        kind: kind.to_owned(),
-                        by: by.to_owned(),
-                        accept: true,
-                        ts,
-                    },
-                )
-                .await?;
+                let expected_len = events.len() as u64;
+                let seq = expected_len + 1;
                 meta.pending_offer = None;
                 meta.ended = true;
-                meta.ended_reason = Some("agreement".into());
+                meta.ended_reason.replace("agreement".into());
                 meta.active_started_ms = 0;
-                save_meta(conn, game_id, meta).await?;
+                let event = GameEvent::OfferResponse {
+                    seq,
+                    kind: kind.to_owned(),
+                    by: by.to_owned(),
+                    accept: true,
+                    ts,
+                };
+                let last_seq = map_cas(
+                    commit_append_cas(conn, game_id, expected_len, meta, &event, None).await?,
+                )?;
                 Ok(OfferOutcome::End(GameEndOut {
                     result: "1/2-1/2",
                     winner: None,
                     reason: "agreement",
-                    seq,
+                    seq: last_seq,
                 }))
             }
             OFFER_TAKEBACK => {
                 let offerer = if pending.by == "w" { "w" } else { "b" };
-                apply_takeback(conn, game_id, meta, events, offerer, ts).await
+                apply_takeback(conn, game_id, meta, events, offerer, by, ts).await
             }
             _ => Err(OfferError::OfferInvalid("unknown offer kind".into())),
         }
@@ -411,25 +447,23 @@ async fn respond_offer_inner(
             "declined"
         };
         let offerer = if pending.by == "w" { "w" } else { "b" };
-        let seq = append_game_event(
-            conn,
-            game_id,
-            GameEvent::OfferResponse {
-                seq: 0,
-                kind: kind.to_owned(),
-                by: by.to_owned(),
-                accept: false,
-                ts,
-            },
-        )
-        .await?;
+        let expected_len = events.len() as u64;
+        let seq = expected_len + 1;
         meta.pending_offer = None;
-        save_meta(conn, game_id, meta).await?;
+        let event = GameEvent::OfferResponse {
+            seq,
+            kind: kind.to_owned(),
+            by: by.to_owned(),
+            accept: false,
+            ts,
+        };
+        let last_seq =
+            map_cas(commit_append_cas(conn, game_id, expected_len, meta, &event, None).await?)?;
         Ok(OfferOutcome::State(OfferStateOut {
             offer: kind,
             by: offerer,
             status,
-            seq,
+            seq: last_seq,
         }))
     }
 }
@@ -440,6 +474,7 @@ async fn apply_takeback(
     meta: &mut GameMeta,
     events: &[GameEvent],
     offerer: &'static str,
+    accepter: &'static str,
     ts: u64,
 ) -> Result<OfferOutcome, OfferError> {
     let net = net_move_events(events);
@@ -453,29 +488,9 @@ async fn apply_takeback(
         return Err(OfferError::Corrupt("net move stack corrupt".into()));
     };
 
-    // Append first so a failed RPUSH cannot leave meta clocks undone while the ply remains.
-    let _ = append_game_event(
-        conn,
-        game_id,
-        GameEvent::OfferResponse {
-            seq: 0,
-            kind: OFFER_TAKEBACK.to_owned(),
-            by: offerer.to_owned(),
-            accept: true,
-            ts,
-        },
-    )
-    .await?;
-    let seq = append_game_event(
-        conn,
-        game_id,
-        GameEvent::Takeback {
-            seq: 0,
-            undone_seq: *undone_seq,
-            ts,
-        },
-    )
-    .await?;
+    let expected_len = events.len() as u64;
+    let resp_seq = expected_len + 1;
+    let takeback_seq = expected_len + 2;
 
     // Restore clocks + lag quotas from the snapshot taken before the undone ply.
     meta.clock_w_ms = meta.prev_clock_w_ms;
@@ -484,19 +499,55 @@ async fn apply_takeback(
     meta.lag_quota_b_ms = meta.prev_lag_quota_b_ms;
     meta.pending_offer = None;
 
-    let fen = replay_fen(&meta.initial_fen, &load_events(conn, game_id).await?)?;
+    // Replay after the pending Takeback event so active side matches the undone position.
+    let mut projected = events.to_vec();
+    projected.push(GameEvent::OfferResponse {
+        seq: resp_seq,
+        kind: OFFER_TAKEBACK.to_owned(),
+        by: accepter.to_owned(),
+        accept: true,
+        ts,
+    });
+    projected.push(GameEvent::Takeback {
+        seq: takeback_seq,
+        undone_seq: *undone_seq,
+        ts,
+    });
+    let fen = replay_fen(&meta.initial_fen, &projected)?;
     let active = fen.split_whitespace().nth(1).unwrap_or("w");
     meta.active = active.to_owned();
     // Fresh think clock for the side that must move again after the undo.
     meta.active_started_ms = ts;
 
-    save_meta(conn, game_id, meta).await?;
+    let response = GameEvent::OfferResponse {
+        seq: resp_seq,
+        kind: OFFER_TAKEBACK.to_owned(),
+        by: accepter.to_owned(),
+        accept: true,
+        ts,
+    };
+    let takeback = GameEvent::Takeback {
+        seq: takeback_seq,
+        undone_seq: *undone_seq,
+        ts,
+    };
+    let last_seq = map_cas(
+        commit_append_cas(
+            conn,
+            game_id,
+            expected_len,
+            meta,
+            &response,
+            Some(&takeback),
+        )
+        .await?,
+    )?;
 
     Ok(OfferOutcome::State(OfferStateOut {
         offer: OFFER_TAKEBACK,
         by: offerer,
         status: "accepted",
-        seq,
+        seq: last_seq,
     }))
 }
 
@@ -507,38 +558,71 @@ pub async fn resign(
     player_id: &str,
     ts: u64,
 ) -> Result<OfferOutcome, OfferError> {
+    for attempt in 0..MAX_CAS_RETRIES {
+        match resign_once(conn, game_id, player_id, ts).await {
+            Ok(out) => return Ok(out),
+            Err(OfferError::Conflict) if attempt + 1 < MAX_CAS_RETRIES => continue,
+            Err(OfferError::Conflict) => return Err(OfferError::GameGone),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(OfferError::GameGone)
+}
+
+async fn resign_once(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    player_id: &str,
+    ts: u64,
+) -> Result<OfferOutcome, OfferError> {
     let mut meta = load_meta(conn, game_id).await?;
     require_live(&meta)?;
     let by = seat_color(&meta, player_id)?;
     let winner = opponent(by);
     let result = if winner == "w" { "1-0" } else { "0-1" };
+    let events = load_events(conn, game_id).await?;
+    let expected_len = events.len() as u64;
+    let seq = expected_len + 1;
 
-    let seq = append_game_event(
-        conn,
-        game_id,
-        GameEvent::Resign {
-            seq: 0,
-            by: by.to_owned(),
-            ts,
-        },
-    )
-    .await?;
     meta.pending_offer = None;
     meta.ended = true;
-    meta.ended_reason = Some("resign".into());
+    meta.ended_reason.replace("resign".into());
     meta.active_started_ms = 0;
-    save_meta(conn, game_id, &meta).await?;
+    let event = GameEvent::Resign {
+        seq,
+        by: by.to_owned(),
+        ts,
+    };
+    let last_seq =
+        map_cas(commit_append_cas(conn, game_id, expected_len, &meta, &event, None).await?)?;
 
     Ok(OfferOutcome::End(GameEndOut {
         result,
         winner: Some(winner),
         reason: "resign",
-        seq,
+        seq: last_seq,
     }))
 }
 
 /// Abort under ADR-005 first-move rules (0 plies, or 1 ply within class window).
 pub async fn abort(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    player_id: &str,
+    ts: u64,
+) -> Result<OfferOutcome, OfferError> {
+    for attempt in 0..MAX_CAS_RETRIES {
+        match abort_once(conn, game_id, player_id, ts).await {
+            Ok(out) => return Ok(out),
+            Err(OfferError::Conflict) if attempt + 1 < MAX_CAS_RETRIES => continue,
+            Err(OfferError::Conflict) => return Err(OfferError::GameGone),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(OfferError::GameGone)
+}
+
+async fn abort_once(
     conn: &mut ConnectionManager,
     game_id: &str,
     player_id: &str,
@@ -560,26 +644,24 @@ pub async fn abort(
         ));
     }
 
-    let seq = append_game_event(
-        conn,
-        game_id,
-        GameEvent::Abort {
-            seq: 0,
-            by: by.to_owned(),
-            ts,
-        },
-    )
-    .await?;
+    let expected_len = events.len() as u64;
+    let seq = expected_len + 1;
     meta.pending_offer = None;
     meta.ended = true;
-    meta.ended_reason = Some("abort".into());
+    meta.ended_reason.replace("abort".into());
     meta.active_started_ms = 0;
-    save_meta(conn, game_id, &meta).await?;
+    let event = GameEvent::Abort {
+        seq,
+        by: by.to_owned(),
+        ts,
+    };
+    let last_seq =
+        map_cas(commit_append_cas(conn, game_id, expected_len, &meta, &event, None).await?)?;
 
     Ok(OfferOutcome::End(GameEndOut {
         result: "*",
         winner: None,
         reason: "abort",
-        seq,
+        seq: last_seq,
     }))
 }

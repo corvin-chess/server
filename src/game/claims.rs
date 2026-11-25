@@ -3,6 +3,7 @@
 //! Current-position claims only (FIDE "has appeared"); claim-with-move ("about to
 //! appear") stays out of scope. Side to move must be the claimant. Auto draws run
 //! after a successful apply when chess-core reports fivefold or seventy-five.
+//! Redis Lua CAS commit for claim appends (CV-173).
 
 use std::fmt;
 
@@ -14,10 +15,13 @@ use super::events::GameEvent;
 use super::offers::GameEndOut;
 use super::replay::net_move_events;
 use super::store::{
-    append_game_event, load_events, load_meta, save_meta, GameLogError, MAX_PLAYER_ID_LEN,
+    append_game_event, commit_append_cas, load_events, load_meta, CasCommitResult, GameLogError,
+    MAX_PLAYER_ID_LEN,
 };
 
 const PROTOCOL_V: u32 = 1;
+/// Bounded CAS retries when another writer wins the event-length race.
+const MAX_CAS_RETRIES: u32 = 8;
 
 /// PROTOCOL `Error.code` for failed draw claims.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -43,6 +47,8 @@ pub enum ClaimError {
     ClaimDenied(String),
     Auth,
     GameGone,
+    /// CAS lost the event-length race; `claim_draw` retries before surfacing GameGone.
+    Conflict,
     Corrupt(String),
     TooManyEvents,
     Redis(redis::RedisError),
@@ -53,7 +59,7 @@ impl ClaimError {
         match self {
             Self::ClaimDenied(_) => ClaimRejectCode::ClaimDenied,
             Self::Auth => ClaimRejectCode::Auth,
-            Self::GameGone => ClaimRejectCode::GameGone,
+            Self::GameGone | Self::Conflict => ClaimRejectCode::GameGone,
             // Storage faults surface as CLAIM_DENIED to the client (same as offers).
             Self::Corrupt(_) | Self::TooManyEvents | Self::Redis(_) => ClaimRejectCode::ClaimDenied,
         }
@@ -66,6 +72,7 @@ impl fmt::Display for ClaimError {
             Self::ClaimDenied(msg) => write!(f, "{msg}"),
             Self::Auth => write!(f, "not a player in this game"),
             Self::GameGone => write!(f, "game not found"),
+            Self::Conflict => write!(f, "claim conflict (CAS)"),
             Self::Corrupt(detail) => write!(f, "corrupt game state: {detail}"),
             Self::TooManyEvents => write!(f, "game event log exceeds max length"),
             Self::Redis(err) => write!(f, "{err}"),
@@ -197,8 +204,35 @@ fn seat_color(
     }
 }
 
+fn map_cas(cas: CasCommitResult) -> Result<u64, ClaimError> {
+    match cas {
+        CasCommitResult::Ok { last_seq, .. } => Ok(last_seq),
+        CasCommitResult::Conflict { .. } => Err(ClaimError::Conflict),
+        CasCommitResult::Gone => Err(ClaimError::GameGone),
+        CasCommitResult::TooManyEvents => Err(ClaimError::TooManyEvents),
+        CasCommitResult::Corrupt(detail) => Err(ClaimError::Corrupt(detail)),
+    }
+}
+
 /// Claim a draw by threefold or fifty-move rule. Only the side to move may claim.
 pub async fn claim_draw(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    player_id: &str,
+    ts: u64,
+) -> Result<GameEndOut, ClaimError> {
+    for attempt in 0..MAX_CAS_RETRIES {
+        match claim_draw_once(conn, game_id, player_id, ts).await {
+            Ok(out) => return Ok(out),
+            Err(ClaimError::Conflict) if attempt + 1 < MAX_CAS_RETRIES => continue,
+            Err(ClaimError::Conflict) => return Err(ClaimError::GameGone),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(ClaimError::GameGone)
+}
+
+async fn claim_draw_once(
     conn: &mut ConnectionManager,
     game_id: &str,
     player_id: &str,
@@ -222,28 +256,26 @@ pub async fn claim_draw(
         ));
     };
 
-    let seq = append_game_event(
-        conn,
-        game_id,
-        GameEvent::ClaimDraw {
-            seq: 0,
-            by: by.to_owned(),
-            kind: reason.to_owned(),
-            ts,
-        },
-    )
-    .await?;
+    let expected_len = events.len() as u64;
+    let seq = expected_len + 1;
     meta.pending_offer = None;
     meta.ended = true;
     meta.ended_reason = Some(reason.to_owned());
     meta.active_started_ms = 0;
-    save_meta(conn, game_id, &meta).await?;
+    let event = GameEvent::ClaimDraw {
+        seq,
+        by: by.to_owned(),
+        kind: reason.to_owned(),
+        ts,
+    };
+    let last_seq =
+        map_cas(commit_append_cas(conn, game_id, expected_len, &meta, &event, None).await?)?;
 
     Ok(GameEndOut {
         result: "1/2-1/2",
         winner: None,
         reason,
-        seq,
+        seq: last_seq,
     })
 }
 

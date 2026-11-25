@@ -23,7 +23,7 @@ const CLOSING =
 const PLANNED_AREAS =
   /^(Implementation)$/i
 const BUILT_AREAS =
-  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Atomic apply|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist|Protocol contract fixtures|Play protocol \/ WS|Docker image)$/i
+  /^(README|Axum scaffold|Postgres migrations|Redis presence|Auth|Session cookies \/ CSRF|Age-appropriate defaults|WS Hello\/Welcome\/Ping|Game event log|Move apply|Atomic apply|Atomic append|Clocks|Lag compensation|Offers|Draw claims|Matchmaking|Ratings|Finished game persist|Protocol contract fixtures|Play protocol \/ WS|Docker image)$/i
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`)
@@ -162,6 +162,8 @@ if (!statusTableMatch) {
   let sawWsHelloBuilt = false
   let sawGameEventLogBuilt = false
   let sawMoveApplyBuilt = false
+  let sawAtomicApplyBuilt = false
+  let sawAtomicAppendBuilt = false
   let sawClocksBuilt = false
   let sawLagBuilt = false
   let sawOffersBuilt = false
@@ -213,6 +215,12 @@ if (!statusTableMatch) {
     }
     if (/^Move apply$/i.test(area) && /^Built$/i.test(state)) {
       sawMoveApplyBuilt = true
+    }
+    if (/^Atomic apply$/i.test(area) && /^Built$/i.test(state)) {
+      sawAtomicApplyBuilt = true
+    }
+    if (/^Atomic append$/i.test(area) && /^Built$/i.test(state)) {
+      sawAtomicAppendBuilt = true
     }
     if (/^Clocks$/i.test(area) && /^Built$/i.test(state)) {
       sawClocksBuilt = true
@@ -267,6 +275,12 @@ if (!statusTableMatch) {
   }
   if (!sawMoveApplyBuilt) {
     fail('STATUS must include "| Move apply | Built |"')
+  }
+  if (!sawAtomicApplyBuilt) {
+    fail('STATUS must include "| Atomic apply | Built |"')
+  }
+  if (!sawAtomicAppendBuilt) {
+    fail('STATUS must include "| Atomic append | Built |"')
   }
   if (!sawClocksBuilt) {
     fail('STATUS must include "| Clocks | Built |"')
