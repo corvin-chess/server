@@ -2,6 +2,7 @@
 //! Clocks tick + Fischer increment + flag-before-increment (CV-163 / ADR-005).
 //! Lag compensation from server-measured RTT (CV-164); never trusts client send time.
 //! Fivefold / seventy-five auto draws after a successful ply (CV-166).
+//! Redis Lua CAS commit so concurrent apply cannot double-append (CV-171).
 
 use std::fmt;
 
@@ -9,19 +10,22 @@ use corvin_chess_core::{Color, Move, UciError};
 use redis::aio::ConnectionManager;
 use serde_json::{json, Value};
 
-use super::claims::{auto_draw_reason, position_with_prior_keys, record_auto_draw};
+use super::claims::{auto_draw_reason, position_with_prior_keys};
 use super::clock::{
     flag_outcome_for_position, is_flagged_at_compensated, tick_meta_on_move_compensated,
     write_flag_to_meta, write_tick_to_meta, ClockPair, ClockTick, FlagOutcome,
 };
+use super::events::GameEvent;
 use super::lag::{credit_lag, LagCredit};
 use super::offers::GameEndOut;
 use super::store::{
-    append_move_event, load_events, load_meta, save_meta, GameLogError, MAX_PLAYER_ID_LEN,
-    MAX_UCI_LEN,
+    commit_apply_cas, commit_meta_cas, load_events, load_meta, CasCommitResult, GameLogError,
+    MAX_PLAYER_ID_LEN, MAX_UCI_LEN,
 };
 
 const PROTOCOL_V: u32 = 1;
+/// Bounded CAS retries when another writer wins the event-length race.
+const MAX_CAS_RETRIES: u32 = 8;
 
 /// Successful apply payload fields (PROTOCOL `MoveApplied` body).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +75,8 @@ pub enum ApplyError {
     Flagged {
         outcome: FlagOutcome,
     },
+    /// CAS lost the event-length race; apply retries internally before surfacing.
+    Conflict,
     InvalidUci(UciError),
     Corrupt(String),
     TooManyEvents,
@@ -86,7 +92,11 @@ impl ApplyError {
             Self::GameGone => Some(MoveRejectCode::GameGone),
             Self::Auth => Some(MoveRejectCode::Auth),
             // Flag mid-apply is GameEnd, not MoveRejected. Storage faults → Error INTERNAL.
-            Self::Flagged { .. } | Self::Corrupt(_) | Self::TooManyEvents | Self::Redis(_) => None,
+            Self::Flagged { .. }
+            | Self::Conflict
+            | Self::Corrupt(_)
+            | Self::TooManyEvents
+            | Self::Redis(_) => None,
         }
     }
 }
@@ -99,6 +109,7 @@ impl fmt::Display for ApplyError {
             Self::GameGone => write!(f, "game not found"),
             Self::Auth => write!(f, "not a player in this game"),
             Self::Flagged { outcome } => write!(f, "flagged: {}", outcome.flagged),
+            Self::Conflict => write!(f, "apply conflict (CAS)"),
             Self::InvalidUci(err) => write!(f, "invalid UCI: {err}"),
             Self::Corrupt(detail) => write!(f, "corrupt game state: {detail}"),
             Self::TooManyEvents => write!(f, "game event log exceeds max length"),
@@ -190,7 +201,7 @@ pub fn move_rejected_json(id: &str, code: MoveRejectCode, message: &str) -> Valu
 ///
 /// Deducts elapsed think time from the mover, adds Fischer `increment_ms`, then
 /// starts the opponent clock at `ts`. Flags before increment (ADR-005).
-/// Single-writer per game is assumed; concurrent apply needs Lua/CAS (CV-171).
+/// Commits via Redis Lua CAS on event length (CV-171).
 pub async fn apply_move(
     conn: &mut ConnectionManager,
     game_id: &str,
@@ -219,6 +230,53 @@ pub async fn apply_move_with_rtt(
         return Err(ApplyError::InvalidUci(UciError::Invalid));
     }
 
+    for attempt in 0..MAX_CAS_RETRIES {
+        match try_apply_once(conn, game_id, player_id, uci, ts, rtt_ms).await {
+            Ok(applied) => return Ok(applied),
+            Err(ApplyError::Conflict) if attempt + 1 < MAX_CAS_RETRIES => continue,
+            Err(ApplyError::Conflict) => {
+                // Last resort: map exhausted CAS races to a client reject, not INTERNAL.
+                return resolve_exhausted_conflict(conn, game_id, player_id).await;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    resolve_exhausted_conflict(conn, game_id, player_id).await
+}
+
+async fn resolve_exhausted_conflict(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    player_id: &str,
+) -> Result<AppliedMove, ApplyError> {
+    let meta = load_meta(conn, game_id).await?;
+    if meta.ended {
+        return Err(ApplyError::GameGone);
+    }
+    let events = load_events(conn, game_id).await?;
+    let (pos, _) = position_with_prior_keys(&meta.initial_fen, &events)
+        .map_err(|err| ApplyError::Corrupt(err.to_string()))?;
+    let seat = if player_id == meta.white_id {
+        Color::White
+    } else if player_id == meta.black_id {
+        Color::Black
+    } else {
+        return Err(ApplyError::Auth);
+    };
+    if pos.side_to_move() != seat {
+        return Err(ApplyError::NotYourTurn);
+    }
+    Err(ApplyError::Conflict)
+}
+
+async fn try_apply_once(
+    conn: &mut ConnectionManager,
+    game_id: &str,
+    player_id: &str,
+    uci: &str,
+    ts: u64,
+    rtt_ms: Option<u64>,
+) -> Result<AppliedMove, ApplyError> {
     let mut meta = load_meta(conn, game_id).await?;
     if meta.ended {
         return Err(ApplyError::GameGone);
@@ -236,6 +294,7 @@ pub async fn apply_move_with_rtt(
     };
 
     let events = load_events(conn, game_id).await?;
+    let expected_len = events.len() as u64;
     // Same walk as FEN replay, but keep prior repetition keys for post-ply auto draws.
     let (pos, prior) = position_with_prior_keys(&meta.initial_fen, &events)
         .map_err(|err| ApplyError::Corrupt(err.to_string()))?;
@@ -283,8 +342,14 @@ pub async fn apply_move_with_rtt(
         write_flag_to_meta(&mut meta, color, &zeroed);
         meta.pending_offer = None;
         meta.ended_reason = Some(format!("flag:{}", outcome.result));
-        save_meta(conn, game_id, &meta).await?;
-        return Err(ApplyError::Flagged { outcome });
+        // CAS meta-only so a concurrent ply cannot be overwritten by stale flag meta.
+        match commit_meta_cas(conn, game_id, expected_len, &meta).await? {
+            CasCommitResult::Ok { .. } => return Err(ApplyError::Flagged { outcome }),
+            CasCommitResult::Conflict { .. } => return Err(ApplyError::Conflict),
+            CasCommitResult::Gone => return Err(ApplyError::GameGone),
+            CasCommitResult::TooManyEvents => return Err(ApplyError::TooManyEvents),
+            CasCommitResult::Corrupt(detail) => return Err(ApplyError::Corrupt(detail)),
+        }
     }
 
     // Legality before clock commit so illegal attempts do not mutate Redis clocks.
@@ -318,8 +383,13 @@ pub async fn apply_move_with_rtt(
             write_flag_to_meta(&mut meta, color, &clocks);
             meta.pending_offer = None;
             meta.ended_reason = Some(format!("flag:{}", outcome.result));
-            save_meta(conn, game_id, &meta).await?;
-            return Err(ApplyError::Flagged { outcome });
+            match commit_meta_cas(conn, game_id, expected_len, &meta).await? {
+                CasCommitResult::Ok { .. } => return Err(ApplyError::Flagged { outcome }),
+                CasCommitResult::Conflict { .. } => return Err(ApplyError::Conflict),
+                CasCommitResult::Gone => return Err(ApplyError::GameGone),
+                CasCommitResult::TooManyEvents => return Err(ApplyError::TooManyEvents),
+                CasCommitResult::Corrupt(detail) => return Err(ApplyError::Corrupt(detail)),
+            }
         }
         ClockTick::Applied(pair) => {
             write_tick_to_meta(&mut meta, &pair);
@@ -346,8 +416,8 @@ pub async fn apply_move_with_rtt(
 
     let mut prior_for_next = prior;
     prior_for_next.push(pos.repetition_key());
-    // Detect auto-draw before Redis writes so meta.ended is set with the clock save
-    // (a failed AutoDraw append must not leave a live fivefold/seventy-five game).
+    // Detect auto-draw before Redis writes so meta.ended is set with the Move CAS
+    // (Move + AutoDraw share one Lua script; no live fivefold/seventy-five gap).
     let auto_reason = auto_draw_reason(&next, &prior_for_next);
     if let Some(reason) = auto_reason {
         meta.pending_offer = None;
@@ -356,30 +426,51 @@ pub async fn apply_move_with_rtt(
         meta.active_started_ms = 0;
     }
 
-    // Persist clocks before the ply so a failed RPUSH does not leave an orphan move
-    // with stale clocks; a failed append after save leaves clocks ahead of the board
-    // (recoverable by CV-171 atomic apply). Prefer that over move-without-clocks.
-    save_meta(conn, game_id, &meta).await?;
-    let seq = append_move_event(conn, game_id, uci, ts).await?;
+    let move_seq = expected_len + 1;
+    let move_event = GameEvent::move_uci(move_seq, uci, ts);
+    let auto_event = auto_reason.map(|reason| GameEvent::AutoDraw {
+        seq: move_seq + 1,
+        kind: reason.to_owned(),
+        ts,
+    });
 
-    let auto_draw = match auto_reason {
-        Some(reason) => Some(
-            record_auto_draw(conn, game_id, reason, ts)
-                .await
-                .map_err(|err| ApplyError::Corrupt(err.to_string()))?,
-        ),
-        None => None,
-    };
+    // Atomic SET meta + RPUSH Move (+ AutoDraw): concurrent apply loses CAS, retries.
+    let cas = commit_apply_cas(
+        conn,
+        game_id,
+        expected_len,
+        &meta,
+        &move_event,
+        auto_event.as_ref(),
+    )
+    .await?;
 
-    Ok(AppliedMove {
-        uci: uci.to_owned(),
-        san,
-        fen: next_fen,
-        clock_w_ms: meta.clock_w_ms,
-        clock_b_ms: meta.clock_b_ms,
-        active: color_active(next.side_to_move()),
-        seq,
-        lag_comp_ms: if lag_comp > 0 { Some(lag_comp) } else { None },
-        auto_draw,
-    })
+    match cas {
+        CasCommitResult::Ok {
+            move_seq: seq,
+            last_seq,
+        } => {
+            let auto_draw = auto_reason.map(|reason| GameEndOut {
+                result: "1/2-1/2",
+                winner: None,
+                reason,
+                seq: last_seq,
+            });
+            Ok(AppliedMove {
+                uci: uci.to_owned(),
+                san,
+                fen: next_fen,
+                clock_w_ms: meta.clock_w_ms,
+                clock_b_ms: meta.clock_b_ms,
+                active: color_active(next.side_to_move()),
+                seq,
+                lag_comp_ms: if lag_comp > 0 { Some(lag_comp) } else { None },
+                auto_draw,
+            })
+        }
+        CasCommitResult::Conflict { .. } => Err(ApplyError::Conflict),
+        CasCommitResult::Gone => Err(ApplyError::GameGone),
+        CasCommitResult::TooManyEvents => Err(ApplyError::TooManyEvents),
+        CasCommitResult::Corrupt(detail) => Err(ApplyError::Corrupt(detail)),
+    }
 }
